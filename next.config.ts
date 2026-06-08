@@ -2,7 +2,9 @@ import type { NextConfig } from "next";
 import { withWorkflow } from "workflow/next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // The Slack SDK uses dynamic requires; keep it external so the workflow/step bundler
+  // doesn't try to inline it.
+  serverExternalPackages: ["@slack/web-api"],
 };
 
 // withWorkflow installs the SWC transform that turns "use workflow" / "use step"

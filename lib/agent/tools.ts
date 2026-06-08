@@ -2,6 +2,7 @@ import { tool } from "ai";
 import { z } from "zod";
 import { sleep } from "workflow";
 import { approvalHook, type ApprovalDecision } from "@/lib/workflow/hooks";
+import { postApprovalToSlack, resolveSlackMessage } from "@/lib/workflow/slack-steps";
 
 // ── Simulated fintech back office ────────────────────────────────────────────
 // No database — a small in-memory fixture is enough to make the demo concrete.
@@ -99,13 +100,15 @@ export async function executeTransfer({
 // ── Human-in-the-loop tool (workflow-level, not a step — it suspends on a hook) ─
 
 async function requestHumanApproval(
-  // The model-supplied input (summary/action/riskLevel) is surfaced to the UI via the tool
-  // call itself; here we only need the call id to key the hook.
-  _input: { summary: string; action: string; riskLevel: "low" | "medium" | "high" },
+  input: { summary: string; action: string; riskLevel: "low" | "medium" | "high" },
   { toolCallId }: { toolCallId: string },
 ): Promise<ApprovalDecision> {
-  // Suspend the durable run on a hook keyed by this tool call. The UI (Phase 2) and
-  // Slack (Phase 3) resume the very same token. Zero compute is used while suspended.
+  const details = { summary: input.summary, action: input.action, riskLevel: input.riskLevel };
+
+  // Post to Slack (if configured), then suspend the durable run on a hook keyed by this tool
+  // call. The Slack buttons and the in-app card both resume the very same token. Zero compute
+  // is used while suspended.
+  const slackRef = await postApprovalToSlack(details, toolCallId);
   const hook = approvalHook.create({ token: toolCallId });
 
   const TIMED_OUT = Symbol("timed-out");
@@ -114,11 +117,16 @@ async function requestHumanApproval(
     sleep(APPROVAL_TIMEOUT_MS).then(() => TIMED_OUT),
   ]);
 
+  let decision: ApprovalDecision;
   if (typeof outcome === "symbol") {
     hook.dispose();
-    return { approved: false, by: "system", note: "Approval timed out — denied by default." };
+    decision = { approved: false, by: "system", note: "Approval timed out — denied by default." };
+  } else {
+    decision = outcome;
   }
-  return outcome;
+
+  await resolveSlackMessage(slackRef, details, decision);
+  return decision;
 }
 
 // ── Tool set handed to the DurableAgent ──────────────────────────────────────
