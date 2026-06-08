@@ -1,7 +1,8 @@
 import { DurableAgent } from "@workflow/ai/agent";
 import { anthropic } from "@workflow/ai/anthropic";
 import { getWritable } from "workflow";
-import type { ModelMessage, UIMessageChunk } from "ai";
+import { stepCountIs, type ModelMessage, type UIMessageChunk } from "ai";
+import { tools } from "@/lib/agent/tools";
 
 /** The Claude model the agent runs on. Sonnet 4.6 — fast and capable for an agentic loop. */
 export const AGENT_MODEL = "claude-sonnet-4-6";
@@ -20,11 +21,13 @@ export async function chatWorkflow(messages: ModelMessage[], instructions: strin
   const agent = new DurableAgent({
     model: anthropic(AGENT_MODEL),
     instructions,
-    // Tools (fintech actions + requestHumanApproval) are added in Phases 2 and 3.
+    tools,
   });
 
   await agent.stream({
     messages,
     writable: getWritable<UIMessageChunk>(),
+    // Allow the agent to loop over tool calls (look up → maybe ask a human → act → confirm).
+    stopWhen: stepCountIs(12),
   });
 }
