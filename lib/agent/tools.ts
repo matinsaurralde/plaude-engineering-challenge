@@ -99,11 +99,9 @@ export async function executeTransfer({
 // ── Human-in-the-loop tool (workflow-level, not a step — it suspends on a hook) ─
 
 async function requestHumanApproval(
-  {
-    summary,
-    action,
-    riskLevel,
-  }: { summary: string; action: string; riskLevel: "low" | "medium" | "high" },
+  // The model-supplied input (summary/action/riskLevel) is surfaced to the UI via the tool
+  // call itself; here we only need the call id to key the hook.
+  _input: { summary: string; action: string; riskLevel: "low" | "medium" | "high" },
   { toolCallId }: { toolCallId: string },
 ): Promise<ApprovalDecision> {
   // Suspend the durable run on a hook keyed by this tool call. The UI (Phase 2) and
