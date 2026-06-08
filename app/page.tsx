@@ -1,122 +1,656 @@
 "use client";
 
 import { useChat } from "@ai-sdk/react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { UIMessage } from "ai";
+import { DEFAULT_INSTRUCTIONS } from "@/lib/agent/instructions";
+import {
+  buildExport,
+  buildTimeline,
+  deriveSummary,
+  money,
+  type CaseStatus,
+  type TraceEvent,
+} from "@/lib/case-trace";
+import {
+  loadCases,
+  loadInstructions,
+  newCaseId,
+  saveCases,
+  saveInstructions,
+  titleFromMessages,
+  type StoredCase,
+} from "@/lib/cases";
+
+type Tab = "chat" | "engineering" | "instructions";
 
 const EXAMPLES = [
-  "How do I check my account balance?",
-  "Refund order #4815 for $12.50",
-  "Move $25,000 from operating to payroll",
+  "Refund $12.50 on order o_4815 for account 4815",
+  "Refund $240 on order o_9000 for account 9000",
+  "Transfer $25,000 from account 2231 to account 9000",
 ];
 
+const STATUS_META: Record<CaseStatus, { label: string; text: string; dot: string }> = {
+  "pending-approval": { label: "Awaiting approval", text: "text-amber-400", dot: "bg-amber-400" },
+  approved: { label: "Approved", text: "text-emerald-400", dot: "bg-emerald-400" },
+  denied: { label: "Denied", text: "text-rose-400", dot: "bg-rose-400" },
+  handled: { label: "Handled", text: "text-zinc-400", dot: "bg-zinc-500" },
+  active: { label: "Active", text: "text-sky-400", dot: "bg-sky-400" },
+  idle: { label: "New", text: "text-zinc-500", dot: "bg-zinc-600" },
+};
+
 export default function Home() {
-  const { messages, sendMessage, status } = useChat();
+  const { messages, sendMessage, status, setMessages } = useChat();
+  const [tab, setTab] = useState<Tab>("chat");
   const [input, setInput] = useState("");
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const [instructions, setInstructions] = useState(DEFAULT_INSTRUCTIONS);
+  const [cases, setCases] = useState<StoredCase[]>([]);
+  const [activeId, setActiveId] = useState("");
+  const [times, setTimes] = useState<Record<string, number>>({});
+  const [approving, setApproving] = useState(false);
 
   const busy = status === "submitted" || status === "streaming";
 
+  // Load persisted cases + instructions once (one-time hydration from localStorage).
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages, busy]);
+    /* eslint-disable react-hooks/set-state-in-effect -- syncing React state from localStorage on mount */
+    const loaded = loadCases();
+    setCases(loaded);
+    setInstructions(loadInstructions(DEFAULT_INSTRUCTIONS));
+    if (loaded.length > 0) {
+      setActiveId(loaded[0].id);
+      setMessages(loaded[0].messages);
+    } else {
+      setActiveId(newCaseId());
+    }
+    /* eslint-enable react-hooks/set-state-in-effect */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Persist the active conversation as a case — only once a turn settles (keeps writes off the
+  // streaming hot path).
+  useEffect(() => {
+    if (!activeId || busy || messages.length === 0) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- persisting a settled conversation
+    setCases((prev) => {
+      const existing = prev.find((c) => c.id === activeId);
+      const next: StoredCase[] = existing
+        ? prev.map((c) =>
+            c.id === activeId ? { ...c, title: titleFromMessages(messages), messages } : c,
+          )
+        : [
+            { id: activeId, title: titleFromMessages(messages), createdAt: Date.now(), messages },
+            ...prev,
+          ];
+      saveCases(next);
+      return next;
+    });
+  }, [messages, activeId, busy]);
+
+  // Stamp the wall-clock time each timeline event was first observed.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- bounded: only stamps brand-new events
+    setTimes((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const e of buildTimeline(messages)) {
+        if (next[e.key] === undefined) {
+          next[e.key] = Date.now();
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [messages]);
+
+  const timeline = useMemo(() => buildTimeline(messages), [messages]);
+  const summary = useMemo(() => deriveSummary(messages), [messages]);
+  const pending = timeline.find((e) => e.kind === "approval-request" && e.approvalToken);
 
   function submit(text: string) {
     const trimmed = text.trim();
     if (!trimmed || busy) return;
-    sendMessage({ text: trimmed });
+    sendMessage({ text: trimmed }, { body: { instructions } });
     setInput("");
+    setTab("chat");
+  }
+
+  function selectCase(id: string) {
+    const c = cases.find((x) => x.id === id);
+    if (!c) return;
+    setActiveId(id);
+    setMessages(c.messages);
+    setTab("chat");
+  }
+
+  function newCase() {
+    setActiveId(newCaseId());
+    setMessages([]);
+    setInput("");
+    setTab("chat");
+  }
+
+  async function resolveApproval(token: string, approved: boolean, note: string) {
+    setApproving(true);
+    try {
+      await fetch("/api/approve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, approved, note: note.trim() || undefined }),
+      });
+    } finally {
+      setApproving(false);
+    }
+  }
+
+  function updateInstructions(value: string) {
+    setInstructions(value);
+    saveInstructions(value);
   }
 
   return (
-    <div className="flex h-dvh flex-col bg-zinc-950 text-zinc-100">
-      <header className="flex items-center gap-3 border-b border-zinc-800/80 px-5 py-3.5">
-        <div className="grid size-9 place-items-center rounded-lg bg-gradient-to-br from-emerald-400 to-teal-600 font-bold text-zinc-950">
-          A
-        </div>
-        <div className="leading-tight">
-          <h1 className="text-sm font-semibold">Matute</h1>
-          <p className="text-xs text-zinc-500">Human-in-the-loop fintech agent</p>
-        </div>
-        <span className="ml-auto rounded-full border border-zinc-800 px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider text-zinc-500">
-          DurableAgent
-        </span>
-      </header>
+    <div className="flex h-dvh bg-zinc-950 text-zinc-100">
+      <Sidebar cases={cases} activeId={activeId} onSelect={selectCase} onNew={newCase} />
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto">
-        <div className="mx-auto flex w-full max-w-2xl flex-col gap-5 px-4 py-6">
-          {messages.length === 0 ? (
-            <div className="mt-[12vh] flex flex-col items-center text-center">
-              <h2 className="text-lg font-medium text-zinc-300">What can I help you with?</h2>
-              <p className="mt-1 text-sm text-zinc-500">
-                Ask anything — the agent pauses for human approval in Slack when the rules say so.
-              </p>
-              <div className="mt-6 flex flex-wrap justify-center gap-2">
-                {EXAMPLES.map((ex) => (
-                  <button
-                    key={ex}
-                    onClick={() => submit(ex)}
-                    className="rounded-full border border-zinc-800 bg-zinc-900 px-3.5 py-1.5 text-xs text-zinc-300 transition hover:border-zinc-600 hover:text-zinc-100"
-                  >
-                    {ex}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : (
-            messages.map((m) => (
-              <Message key={m.id} role={m.role}>
-                {m.parts
-                  .filter((p) => p.type === "text")
-                  .map((p, i) => (
-                    <span key={i}>{(p as { text: string }).text}</span>
-                  ))}
-              </Message>
-            ))
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="flex items-center gap-3 border-b border-zinc-800/80 px-5 py-3">
+          <div className="grid size-8 place-items-center rounded-lg bg-gradient-to-br from-emerald-400 to-teal-600 text-sm font-bold text-zinc-950">
+            M
+          </div>
+          <div className="leading-tight">
+            <h1 className="text-sm font-semibold">Matute</h1>
+            <p className="text-xs text-zinc-500">Human-in-the-loop fintech agent</p>
+          </div>
+          <nav className="ml-auto flex gap-1 rounded-lg border border-zinc-800 bg-zinc-900 p-1 text-xs">
+            {(["chat", "engineering", "instructions"] as Tab[]).map((t) => (
+              <button
+                key={t}
+                onClick={() => setTab(t)}
+                className={`rounded-md px-3 py-1.5 capitalize transition ${
+                  tab === t ? "bg-zinc-700 text-zinc-100" : "text-zinc-400 hover:text-zinc-200"
+                }`}
+              >
+                {t}
+                {t === "engineering" && pending ? (
+                  <span className="ml-1.5 inline-block size-1.5 rounded-full bg-amber-400 align-middle" />
+                ) : null}
+              </button>
+            ))}
+          </nav>
+        </header>
+
+        <main className="min-h-0 flex-1 overflow-y-auto">
+          {tab === "chat" && (
+            <ChatTab
+              messages={messages}
+              busy={busy}
+              pending={pending}
+              approving={approving}
+              onResolve={resolveApproval}
+              onExample={submit}
+            />
           )}
-
-          {busy && messages.at(-1)?.role !== "assistant" && (
-            <Message role="assistant">
-              <Dots />
-            </Message>
-          )}
-        </div>
-      </div>
-
-      <div className="border-t border-zinc-800/80 px-4 py-3">
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            submit(input);
-          }}
-          className="mx-auto flex w-full max-w-2xl items-end gap-2 rounded-2xl border border-zinc-800 bg-zinc-900 px-3 py-2 focus-within:border-zinc-600"
-        >
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                submit(input);
+          {tab === "engineering" && (
+            <EngineeringTab
+              summary={summary}
+              timeline={timeline}
+              times={times}
+              instructions={instructions}
+              empty={messages.length === 0}
+              onExport={() =>
+                buildExport(
+                  {
+                    id: activeId,
+                    title: titleFromMessages(messages),
+                    createdAt: cases.find((c) => c.id === activeId)?.createdAt ?? Date.now(),
+                  },
+                  instructions,
+                  messages,
+                  times,
+                )
               }
-            }}
-            rows={1}
-            placeholder="Message Matute…"
-            className="max-h-40 flex-1 resize-none bg-transparent py-1.5 text-sm outline-none placeholder:text-zinc-600"
-          />
-          <button
-            type="submit"
-            disabled={!input.trim() || busy}
-            className="rounded-lg bg-emerald-500 px-3.5 py-2 text-sm font-medium text-zinc-950 transition enabled:hover:bg-emerald-400 disabled:opacity-40"
-          >
-            Send
-          </button>
-        </form>
+            />
+          )}
+          {tab === "instructions" && (
+            <InstructionsTab value={instructions} onChange={updateInstructions} />
+          )}
+        </main>
+
+        {tab === "chat" && (
+          <Composer input={input} setInput={setInput} onSubmit={() => submit(input)} disabled={busy || !!pending} />
+        )}
       </div>
     </div>
   );
 }
 
-function Message({ role, children }: { role: string; children: React.ReactNode }) {
+// ── Sidebar ──────────────────────────────────────────────────────────────────
+
+function Sidebar({
+  cases,
+  activeId,
+  onSelect,
+  onNew,
+}: {
+  cases: StoredCase[];
+  activeId: string;
+  onSelect: (id: string) => void;
+  onNew: () => void;
+}) {
+  return (
+    <aside className="flex w-60 shrink-0 flex-col border-r border-zinc-800/80 bg-zinc-900/40">
+      <div className="flex items-center justify-between px-4 py-3">
+        <span className="text-xs font-medium uppercase tracking-wider text-zinc-500">Cases</span>
+        <button
+          onClick={onNew}
+          className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-zinc-100"
+        >
+          + New
+        </button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+        {cases.length === 0 ? (
+          <p className="px-2 py-4 text-xs text-zinc-600">No cases yet.</p>
+        ) : (
+          cases.map((c) => {
+            const meta = STATUS_META[deriveSummary(c.messages).status];
+            return (
+              <button
+                key={c.id}
+                onClick={() => onSelect(c.id)}
+                className={`mb-1 flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition ${
+                  c.id === activeId ? "bg-zinc-800" : "hover:bg-zinc-800/50"
+                }`}
+              >
+                <span className={`mt-1.5 size-1.5 shrink-0 rounded-full ${meta.dot}`} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm text-zinc-200">{c.title}</span>
+                  <span className={`text-[11px] ${meta.text}`}>{meta.label}</span>
+                </span>
+              </button>
+            );
+          })
+        )}
+      </div>
+    </aside>
+  );
+}
+
+// ── Chat tab ─────────────────────────────────────────────────────────────────
+
+function ChatTab({
+  messages,
+  busy,
+  pending,
+  approving,
+  onResolve,
+  onExample,
+}: {
+  messages: UIMessage[];
+  busy: boolean;
+  pending: TraceEvent | undefined;
+  approving: boolean;
+  onResolve: (token: string, approved: boolean, note: string) => void;
+  onExample: (text: string) => void;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+  }, [messages, busy, pending]);
+
+  return (
+    <div ref={scrollRef} className="h-full overflow-y-auto">
+      <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 py-6">
+        {messages.length === 0 ? (
+          <div className="mt-[10vh] flex flex-col items-center text-center">
+            <h2 className="text-lg font-medium text-zinc-300">What can I help you with?</h2>
+            <p className="mt-1 max-w-sm text-sm text-zinc-500">
+              Try a small refund (instant) vs. a large or high-risk one (pauses for human approval).
+            </p>
+            <div className="mt-6 flex flex-col gap-2">
+              {EXAMPLES.map((ex) => (
+                <button
+                  key={ex}
+                  onClick={() => onExample(ex)}
+                  className="rounded-lg border border-zinc-800 bg-zinc-900 px-3.5 py-2 text-left text-xs text-zinc-300 transition hover:border-zinc-600 hover:text-zinc-100"
+                >
+                  {ex}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          messages.map((m) => <ChatMessage key={m.id} message={m} />)
+        )}
+
+        {pending && pending.approvalToken && (
+          <ApprovalCard event={pending} approving={approving} onResolve={onResolve} />
+        )}
+
+        {busy && !pending && messages.at(-1)?.role !== "assistant" && (
+          <Bubble role="assistant">
+            <Dots />
+          </Bubble>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ChatMessage({ message }: { message: UIMessage }) {
+  const parts = (message as unknown as { parts?: { type?: string; text?: string }[] }).parts ?? [];
+  const text = parts
+    .filter((p) => p.type === "text")
+    .map((p) => p.text ?? "")
+    .join("");
+  const toolNames = parts
+    .map((p) => p.type ?? "")
+    .filter((t) => t.startsWith("tool-"))
+    .map((t) => t.slice(5));
+
+  if (!text && toolNames.length === 0) return null;
+
+  return (
+    <div className={message.role === "user" ? "flex justify-end" : "flex flex-col gap-1.5"}>
+      {toolNames.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {toolNames.map((name, i) => (
+            <span
+              key={i}
+              className="rounded-md border border-zinc-800 bg-zinc-900 px-2 py-0.5 font-mono text-[11px] text-zinc-400"
+            >
+              {name === "requestHumanApproval" ? "⏸ requestHumanApproval" : `⚙ ${name}`}
+            </span>
+          ))}
+        </div>
+      )}
+      {text && <Bubble role={message.role}>{text}</Bubble>}
+    </div>
+  );
+}
+
+function ApprovalCard({
+  event,
+  approving,
+  onResolve,
+}: {
+  event: TraceEvent;
+  approving: boolean;
+  onResolve: (token: string, approved: boolean, note: string) => void;
+}) {
+  const [note, setNote] = useState("");
+  const risk = event.approval?.riskLevel ?? "medium";
+  const riskColor =
+    risk === "high" ? "text-rose-400" : risk === "medium" ? "text-amber-400" : "text-emerald-400";
+
+  return (
+    <div className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-4">
+      <div className="flex items-center gap-2">
+        <span className="text-sm font-semibold text-amber-300">⏸ Human approval required</span>
+        <span className={`ml-auto font-mono text-[11px] uppercase ${riskColor}`}>{risk} risk</span>
+      </div>
+      <p className="mt-2 text-sm text-zinc-200">{event.approval?.action ?? event.detail}</p>
+      {event.why && <p className="mt-1 text-xs text-zinc-500">{event.why}</p>}
+
+      <input
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        placeholder="Optional note / input for the agent…"
+        className="mt-3 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none placeholder:text-zinc-600 focus:border-zinc-600"
+      />
+      <div className="mt-3 flex gap-2">
+        <button
+          disabled={approving}
+          onClick={() => onResolve(event.approvalToken!, true, note)}
+          className="rounded-lg bg-emerald-500 px-3.5 py-1.5 text-sm font-medium text-zinc-950 transition enabled:hover:bg-emerald-400 disabled:opacity-50"
+        >
+          Approve
+        </button>
+        <button
+          disabled={approving}
+          onClick={() => onResolve(event.approvalToken!, false, note)}
+          className="rounded-lg border border-zinc-700 px-3.5 py-1.5 text-sm text-zinc-300 transition enabled:hover:border-rose-500/60 enabled:hover:text-rose-300 disabled:opacity-50"
+        >
+          Deny
+        </button>
+        <span className="ml-auto self-center font-mono text-[10px] text-zinc-600">
+          token {event.approvalToken?.slice(0, 10)}…
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ── Engineering tab ──────────────────────────────────────────────────────────
+
+function EngineeringTab({
+  summary,
+  timeline,
+  times,
+  instructions,
+  empty,
+  onExport,
+}: {
+  summary: ReturnType<typeof deriveSummary>;
+  timeline: TraceEvent[];
+  times: Record<string, number>;
+  instructions: string;
+  empty: boolean;
+  onExport: () => object;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  async function copyJson() {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(onExport(), null, 2));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // clipboard blocked — ignore
+    }
+  }
+
+  function downloadJson() {
+    const blob = new Blob([JSON.stringify(onExport(), null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "matute-case.json";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  if (empty) {
+    return (
+      <div className="grid h-full place-items-center text-sm text-zinc-600">
+        Send a message — the run trace shows up here.
+      </div>
+    );
+  }
+
+  const meta = STATUS_META[summary.status];
+
+  return (
+    <div className="mx-auto w-full max-w-3xl px-4 py-6">
+      {/* Case header */}
+      <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4">
+        <div className="flex items-center gap-2">
+          <span className={`size-2 rounded-full ${meta.dot}`} />
+          <span className={`text-sm font-medium ${meta.text}`}>{meta.label}</span>
+          <div className="ml-auto flex gap-2">
+            <button
+              onClick={copyJson}
+              className="rounded-md border border-zinc-700 px-2.5 py-1 text-xs text-zinc-300 transition hover:border-zinc-500"
+            >
+              {copied ? "Copied ✓" : "Copy JSON"}
+            </button>
+            <button
+              onClick={downloadJson}
+              className="rounded-md border border-zinc-700 px-2.5 py-1 text-xs text-zinc-300 transition hover:border-zinc-500"
+            >
+              Download JSON
+            </button>
+          </div>
+        </div>
+        <div className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+          <Field label="Account">
+            {summary.account ? `${summary.account.holder} · #${summary.account.id}` : "—"}
+          </Field>
+          <Field label="Balance">{summary.account ? money(summary.account.balanceUsd) : "—"}</Field>
+          <Field label="Risk">{summary.account?.riskLevel ?? "—"}</Field>
+          <Field label="Operation">
+            {summary.operation
+              ? `${summary.operation.kind}${summary.operation.amountUsd ? " " + money(summary.operation.amountUsd) : ""}`
+              : "—"}
+          </Field>
+          <Field label="Steps">{summary.steps || "—"}</Field>
+          <Field label="Tool calls">{summary.toolCalls || "—"}</Field>
+          <Field label="Approval">
+            {summary.approval
+              ? summary.approval.decision
+                ? summary.approval.decision.approved
+                  ? "approved"
+                  : "denied"
+                : "pending"
+              : "not required"}
+          </Field>
+          <Field label="Decided by">{summary.approval?.decision?.by ?? "—"}</Field>
+        </div>
+      </div>
+
+      {/* Timeline */}
+      <h3 className="mt-6 mb-3 text-xs font-medium uppercase tracking-wider text-zinc-500">
+        Run timeline
+      </h3>
+      <ol className="relative ml-2 border-l border-zinc-800">
+        {timeline.map((e) => (
+          <TimelineItem key={e.key} event={e} at={times[e.key]} />
+        ))}
+      </ol>
+
+      {/* Live instructions */}
+      <h3 className="mt-6 mb-2 text-xs font-medium uppercase tracking-wider text-zinc-500">
+        Instructions used (live)
+      </h3>
+      <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-[11px] leading-relaxed text-zinc-400">
+        {instructions}
+      </pre>
+    </div>
+  );
+}
+
+const EVENT_DOT: Record<TraceEvent["kind"], string> = {
+  user: "bg-sky-400",
+  agent: "bg-zinc-500",
+  tool: "bg-teal-400",
+  "approval-request": "bg-amber-400",
+  "approval-resolved": "bg-emerald-400",
+};
+
+function TimelineItem({ event, at }: { event: TraceEvent; at?: number }) {
+  const dot =
+    event.status === "denied"
+      ? "bg-rose-400"
+      : event.status === "error"
+        ? "bg-rose-400"
+        : EVENT_DOT[event.kind];
+  return (
+    <li className="mb-4 ml-4">
+      <span className={`absolute -left-[5px] mt-1.5 size-2.5 rounded-full ${dot} ring-4 ring-zinc-950`} />
+      <div className="flex items-baseline gap-2">
+        <span className="text-sm font-medium text-zinc-200">{event.title}</span>
+        {event.status === "pending" && (
+          <span className="animate-pulse font-mono text-[10px] text-amber-400">waiting…</span>
+        )}
+        {at && <span className="ml-auto font-mono text-[10px] text-zinc-600">{fmtTime(at)}</span>}
+      </div>
+      {event.detail && <p className="mt-0.5 text-sm whitespace-pre-wrap text-zinc-400">{event.detail}</p>}
+      {event.why && <p className="mt-0.5 text-xs text-zinc-500">↳ {event.why}</p>}
+    </li>
+  );
+}
+
+function fmtTime(ms: number): string {
+  const d = new Date(ms);
+  return d.toTimeString().slice(0, 8);
+}
+
+// ── Instructions tab ─────────────────────────────────────────────────────────
+
+function InstructionsTab({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const dirty = value !== DEFAULT_INSTRUCTIONS;
+  return (
+    <div className="mx-auto flex h-full w-full max-w-3xl flex-col px-4 py-6">
+      <div className="mb-3 flex items-center gap-2">
+        <h2 className="text-sm font-medium text-zinc-300">Plain-text instructions</h2>
+        <span className="text-xs text-zinc-500">used on the next message — no redeploy</span>
+        {dirty && (
+          <button
+            onClick={() => onChange(DEFAULT_INSTRUCTIONS)}
+            className="ml-auto rounded-md border border-zinc-700 px-2.5 py-1 text-xs text-zinc-300 transition hover:border-zinc-500"
+          >
+            Reset to default
+          </button>
+        )}
+      </div>
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        spellCheck={false}
+        className="min-h-0 flex-1 resize-none rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 font-mono text-[13px] leading-relaxed text-zinc-200 outline-none focus:border-zinc-600"
+      />
+    </div>
+  );
+}
+
+// ── Shared bits ──────────────────────────────────────────────────────────────
+
+function Composer({
+  input,
+  setInput,
+  onSubmit,
+  disabled,
+}: {
+  input: string;
+  setInput: (v: string) => void;
+  onSubmit: () => void;
+  disabled: boolean;
+}) {
+  return (
+    <div className="border-t border-zinc-800/80 px-4 py-3">
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          onSubmit();
+        }}
+        className="mx-auto flex w-full max-w-2xl items-end gap-2 rounded-2xl border border-zinc-800 bg-zinc-900 px-3 py-2 focus-within:border-zinc-600"
+      >
+        <textarea
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              onSubmit();
+            }
+          }}
+          rows={1}
+          placeholder="Message Matute…"
+          className="max-h-40 flex-1 resize-none bg-transparent py-1.5 text-sm outline-none placeholder:text-zinc-600"
+        />
+        <button
+          type="submit"
+          disabled={!input.trim() || disabled}
+          className="rounded-lg bg-emerald-500 px-3.5 py-2 text-sm font-medium text-zinc-950 transition enabled:hover:bg-emerald-400 disabled:opacity-40"
+        >
+          Send
+        </button>
+      </form>
+    </div>
+  );
+}
+
+function Bubble({ role, children }: { role: string; children: React.ReactNode }) {
   const isUser = role === "user";
   return (
     <div className={isUser ? "flex justify-end" : "flex justify-start"}>
@@ -129,6 +663,15 @@ function Message({ role, children }: { role: string; children: React.ReactNode }
       >
         {children}
       </div>
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wider text-zinc-600">{label}</div>
+      <div className="mt-0.5 truncate text-sm text-zinc-200">{children}</div>
     </div>
   );
 }
