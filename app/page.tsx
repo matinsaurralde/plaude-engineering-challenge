@@ -34,7 +34,7 @@ export default function Home() {
           A
         </div>
         <div className="leading-tight">
-          <h1 className="text-sm font-semibold">Atlas</h1>
+          <h1 className="text-sm font-semibold">Matute</h1>
           <p className="text-xs text-zinc-500">Human-in-the-loop fintech agent</p>
         </div>
         <span className="ml-auto rounded-full border border-zinc-800 px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider text-zinc-500">
@@ -100,7 +100,7 @@ export default function Home() {
               }
             }}
             rows={1}
-            placeholder="Message Atlas…"
+            placeholder="Message Matute…"
             className="max-h-40 flex-1 resize-none bg-transparent py-1.5 text-sm outline-none placeholder:text-zinc-600"
           />
           <button

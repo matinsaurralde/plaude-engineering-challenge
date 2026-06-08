@@ -8,7 +8,7 @@ provide input, and then **resumes from the exact same point** once the human res
 Built with [WorkflowDevKit](https://workflow-sdk.dev) (`DurableAgent`) on Next.js, as an
 engineering challenge for [Plaude](https://plaude.com).
 
-> **Atlas** is the demo agent — a fintech support assistant. Its entire behaviour, including
+> **Matute** is the demo agent — a fintech support assistant. Its entire behaviour, including
 > *when* to escalate to a human, comes from editable plain-text instructions, not hardcoded
 > logic.
 

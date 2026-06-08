@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Atlas — Human-in-the-loop fintech agent",
+  title: "Matute — Human-in-the-loop fintech agent",
   description:
     "An AI agent governed by plain-text instructions that pauses for human approval in Slack.",
 };

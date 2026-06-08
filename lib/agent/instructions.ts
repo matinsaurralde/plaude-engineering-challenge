@@ -6,7 +6,7 @@
  * Phase 2 expands this with the human-in-the-loop approval scenarios; Phase 1 just
  * proves the agent → UI pipeline.
  */
-export const DEFAULT_INSTRUCTIONS = `You are Atlas, a support agent for a fintech company.
+export const DEFAULT_INSTRUCTIONS = `You are Matute, a support agent for a fintech company.
 
 You help customers and internal operators with account questions, payments, refunds, and
 transfers. Be concise, friendly, and precise. When you do not have enough information to act
