@@ -59,9 +59,17 @@ export default function Home() {
     const loaded = loadCases();
     setCases(loaded);
     setInstructions(loadInstructions(DEFAULT_INSTRUCTIONS));
-    if (loaded.length > 0) {
-      setActiveId(loaded[0].id);
-      setMessages(loaded[0].messages);
+
+    // Deep links from Slack: /?tab=engineering&case=<id>
+    const params = new URLSearchParams(window.location.search);
+    const wantTab = params.get("tab");
+    const wantCase = params.get("case");
+    if (wantTab === "chat" || wantTab === "engineering" || wantTab === "instructions") setTab(wantTab);
+
+    const target = (wantCase && loaded.find((c) => c.id === wantCase)) || loaded[0];
+    if (target) {
+      setActiveId(target.id);
+      setMessages(target.messages);
     } else {
       setActiveId(newCaseId());
     }
@@ -72,8 +80,14 @@ export default function Home() {
   // Persist the active conversation as a case — only once a turn settles (keeps writes off the
   // streaming hot path).
   useEffect(() => {
-    if (!activeId || busy || messages.length === 0) return;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- persisting a settled conversation
+    if (!activeId || messages.length === 0) return;
+    // Persist when a turn settles, or when it's paused on an approval (so the Slack deep link
+    // can find the case while it's awaiting review).
+    const hasPending = buildTimeline(messages).some(
+      (e) => e.kind === "approval-request" && e.approvalToken,
+    );
+    if (busy && !hasPending) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- persisting a settled or paused conversation
     setCases((prev) => {
       const existing = prev.find((c) => c.id === activeId);
       const next: StoredCase[] = existing
@@ -112,7 +126,7 @@ export default function Home() {
   function submit(text: string) {
     const trimmed = text.trim();
     if (!trimmed || busy) return;
-    sendMessage({ text: trimmed }, { body: { instructions } });
+    sendMessage({ text: trimmed }, { body: { instructions, caseId: activeId } });
     setInput("");
     setTab("chat");
   }
@@ -183,14 +197,7 @@ export default function Home() {
 
         <main className="min-h-0 flex-1 overflow-y-auto">
           {tab === "chat" && (
-            <ChatTab
-              messages={messages}
-              busy={busy}
-              pending={pending}
-              approving={approving}
-              onResolve={resolveApproval}
-              onExample={submit}
-            />
+            <ChatTab messages={messages} busy={busy} pending={!!pending} onExample={submit} />
           )}
           {tab === "engineering" && (
             <EngineeringTab
@@ -199,6 +206,9 @@ export default function Home() {
               times={times}
               instructions={instructions}
               empty={messages.length === 0}
+              pending={pending}
+              approving={approving}
+              onResolve={resolveApproval}
               onExport={() =>
                 buildExport(
                   {
@@ -284,15 +294,11 @@ function ChatTab({
   messages,
   busy,
   pending,
-  approving,
-  onResolve,
   onExample,
 }: {
   messages: UIMessage[];
   busy: boolean;
-  pending: TraceEvent | undefined;
-  approving: boolean;
-  onResolve: (token: string, approved: boolean, note: string) => void;
+  pending: boolean;
   onExample: (text: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -325,8 +331,11 @@ function ChatTab({
           messages.map((m) => <ChatMessage key={m.id} message={m} />)
         )}
 
-        {pending && pending.approvalToken && (
-          <ApprovalCard event={pending} approving={approving} onResolve={onResolve} />
+        {pending && (
+          <div className="flex items-center gap-2 self-start rounded-2xl rounded-bl-sm border border-zinc-800 bg-zinc-900 px-4 py-2.5 text-sm text-zinc-400">
+            <span className="size-1.5 animate-pulse rounded-full bg-amber-400" />
+            Reviewing your request…
+          </div>
         )}
 
         {busy && !pending && messages.at(-1)?.role !== "assistant" && (
@@ -446,6 +455,9 @@ function EngineeringTab({
   times,
   instructions,
   empty,
+  pending,
+  approving,
+  onResolve,
   onExport,
 }: {
   summary: ReturnType<typeof deriveSummary>;
@@ -453,6 +465,9 @@ function EngineeringTab({
   times: Record<string, number>;
   instructions: string;
   empty: boolean;
+  pending: TraceEvent | undefined;
+  approving: boolean;
+  onResolve: (token: string, approved: boolean, note: string) => void;
   onExport: () => object;
 }) {
   const [copied, setCopied] = useState(false);
@@ -489,6 +504,12 @@ function EngineeringTab({
 
   return (
     <div className="mx-auto w-full max-w-3xl px-4 py-6">
+      {pending && pending.approvalToken && (
+        <div className="mb-4">
+          <ApprovalCard event={pending} approving={approving} onResolve={onResolve} />
+        </div>
+      )}
+
       {/* Case header */}
       <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4">
         <div className="flex items-center gap-2">
