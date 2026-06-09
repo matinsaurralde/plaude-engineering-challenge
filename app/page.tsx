@@ -632,48 +632,41 @@ function CaseListPanel({
         <span className="ml-auto text-[11px] text-zinc-600">Operator console · click a case to open</span>
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-zinc-800">
-        <div className="min-w-[720px]">
-          <div className="grid grid-cols-[10rem_1fr_5rem_7rem_6rem_5rem] gap-x-4 border-b border-zinc-800 bg-zinc-900/60 px-4 py-2 text-[10px] font-medium uppercase tracking-wider text-zinc-500">
-            <span>Status</span>
-            <span>Case</span>
-            <span>Country</span>
-            <span>Created</span>
-            <span>Response</span>
-            <span className="text-right">Cost</span>
-          </div>
-          <div className="divide-y divide-zinc-800/70">
-            {cases.map((c) => {
-              const status = STATUS_META[deriveSummary(c.messages).status];
-              const dir = ACCOUNT_DIRECTORY[c.accountId ?? ""];
-              const cost = estimateCost(c.messages, instructions);
-              return (
-                <button
-                  key={c.id}
-                  onClick={() => onOpen(c.id)}
-                  className="grid w-full grid-cols-[10rem_1fr_5rem_7rem_6rem_5rem] items-center gap-x-4 px-4 py-3 text-left transition hover:bg-zinc-900/60"
-                >
-                  <span className="flex items-center gap-1.5">
-                    <span className={`size-2 shrink-0 rounded-full ${status.dot}`} />
-                    <span className={`text-[11px] ${status.text}`}>{status.label}</span>
-                  </span>
-                  <span className="min-w-0">
-                    <span className="block truncate text-sm text-zinc-100">{c.title}</span>
-                    <span className="mt-0.5 block truncate text-[11px] text-zinc-500">
-                      {caseDescription(c.messages)}
-                    </span>
-                  </span>
-                  <span className="text-sm" title={dir?.countryName}>
-                    {flagEmoji(dir?.country)} <span className="text-[11px] text-zinc-500">{dir?.country ?? "—"}</span>
-                  </span>
-                  <span className="text-xs text-zinc-400">{formatDate(c.createdAt)}</span>
-                  <span className="text-xs text-zinc-400">{formatDuration(responseTimeMs(c.createdAt, c.updatedAt))}</span>
-                  <span className="text-right font-mono text-xs text-zinc-300">{formatUsd(cost.usd)}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
+      <div className="divide-y divide-zinc-800/70 overflow-hidden rounded-xl border border-zinc-800">
+        {cases.map((c) => {
+          const status = STATUS_META[deriveSummary(c.messages).status];
+          const dir = ACCOUNT_DIRECTORY[c.accountId ?? ""];
+          const cost = estimateCost(c.messages, instructions);
+          return (
+            <button
+              key={c.id}
+              onClick={() => onOpen(c.id)}
+              className="flex w-full items-center gap-4 px-4 py-3 text-left transition hover:bg-zinc-900/50"
+            >
+              <span className={`size-2 shrink-0 rounded-full ${status.dot}`} />
+
+              <span className="min-w-0 flex-1">
+                <span className="flex items-baseline gap-2">
+                  <span className="truncate text-sm text-zinc-100">{c.title}</span>
+                  <span className={`shrink-0 text-[11px] ${status.text}`}>{status.label}</span>
+                </span>
+                <span className="mt-0.5 block truncate text-xs text-zinc-500">
+                  {caseDescription(c.messages)}
+                </span>
+              </span>
+
+              <span className="hidden shrink-0 flex-col items-end gap-0.5 text-[11px] text-zinc-500 sm:flex">
+                <span title={dir?.countryName}>
+                  {flagEmoji(dir?.country)} {formatDate(c.createdAt)}
+                </span>
+                <span className="flex items-center gap-3">
+                  <span>{formatDuration(responseTimeMs(c.createdAt, c.updatedAt))}</span>
+                  <span className="font-mono text-zinc-400">{formatUsd(cost.usd)}</span>
+                </span>
+              </span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -931,18 +924,28 @@ function InstructionsTab({ value, onChange }: { value: string; onChange: (v: str
   const dirty = value !== DEFAULT_INSTRUCTIONS;
   return (
     <div className="mx-auto flex h-full w-full max-w-3xl flex-col px-4 py-6">
-      <div className="mb-3 flex items-center gap-2">
+      <div className="mb-2 flex items-center gap-2">
         <h2 className="text-sm font-medium text-zinc-300">Plain-text instructions</h2>
         <span className="text-xs text-zinc-500">used on the next message — no redeploy</span>
         {dirty && (
-          <button
-            onClick={() => onChange(DEFAULT_INSTRUCTIONS)}
-            className="ml-auto rounded-md border border-zinc-700 px-2.5 py-1 text-xs text-zinc-300 transition hover:border-zinc-500"
-          >
-            Reset to default
-          </button>
+          <>
+            <span className="text-[11px] text-amber-400/80">· showing your edited copy</span>
+            <button
+              onClick={() => onChange(DEFAULT_INSTRUCTIONS)}
+              className="ml-auto rounded-md border border-zinc-700 px-2.5 py-1 text-xs text-zinc-300 transition hover:border-zinc-500"
+            >
+              Reset to default
+            </button>
+          </>
         )}
       </div>
+      <p className="mb-3 text-xs leading-relaxed text-zinc-500">
+        These <span className="text-zinc-300">are</span> the guardrails — layer 1: trust boundary, account
+        scope, approval thresholds + tiers, confidentiality, conduct. They&apos;re probabilistic, so the hard
+        guarantees (account authorization, approval integrity, insufficient-funds) live in{" "}
+        <span className="text-zinc-300">layer 2</span> — enforced in the tool code, not editable here. See{" "}
+        <span className="font-mono text-zinc-400">docs/adr/0001-guardrails.md</span>.
+      </p>
       <textarea
         value={value}
         onChange={(e) => onChange(e.target.value)}
