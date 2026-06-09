@@ -51,42 +51,64 @@ const ACCOUNTS: Record<string, Account> = {
 
 const APPROVAL_TIMEOUT_MS = 5 * 60_000; // 5 minutes, then deny by default (HITL-05)
 
+// ── Tool-level authorization (defense in depth) ──────────────────────────────
+// The customer is "signed in" as one account (passed via experimental_context from the UI).
+// The tools refuse any other account regardless of what the model is talked into — the prompt
+// alone can't enforce this, because without identity the model can't tell whose account it is.
+function authedAccount(opts?: { experimental_context?: unknown }): string | undefined {
+  return (opts?.experimental_context as { authedAccount?: string } | undefined)?.authedAccount;
+}
+
+const NOT_AUTHORIZED = {
+  ok: false as const,
+  authorized: false as const,
+  error: "Not authorized — you can only access your own account.",
+};
+
 // ── Durable step tools (memoized + retried by the workflow runtime) ───────────
 
-export async function lookupAccount({ accountId }: { accountId: string }) {
+export async function lookupAccount(
+  { accountId }: { accountId: string },
+  opts?: { experimental_context?: unknown },
+) {
   "use step";
+  const authed = authedAccount(opts);
+  if (authed && accountId !== authed) {
+    return { found: false as const, authorized: false as const, accountId };
+  }
   const account = ACCOUNTS[accountId];
   if (!account) return { found: false as const, accountId };
   return { found: true as const, ...account };
 }
 
-export async function issueRefund({
-  orderId,
-  amountUsd,
-}: {
-  orderId: string;
-  amountUsd: number;
-}) {
+export async function issueRefund(
+  { accountId, orderId, amountUsd }: { accountId: string; orderId: string; amountUsd: number },
+  opts?: { experimental_context?: unknown },
+) {
   "use step";
+  const authed = authedAccount(opts);
+  if (authed && accountId !== authed) return NOT_AUTHORIZED;
   return {
     ok: true as const,
     refundId: `rf_${orderId}_${Math.round(amountUsd * 100)}`,
+    accountId,
     orderId,
     amountUsd,
     status: "settled" as const,
   };
 }
 
-export async function executeTransfer({
-  fromAccountId,
-  toAccountId,
-  amountUsd,
-}: {
-  fromAccountId: string;
-  toAccountId: string;
-  amountUsd: number;
-}) {
+export async function executeTransfer(
+  {
+    fromAccountId,
+    toAccountId,
+    amountUsd,
+  }: { fromAccountId: string; toAccountId: string; amountUsd: number },
+  opts?: { experimental_context?: unknown },
+) {
   "use step";
+  const authed = authedAccount(opts);
+  if (authed && fromAccountId !== authed) return NOT_AUTHORIZED;
   return {
     ok: true as const,
     transferId: `tx_${fromAccountId}_${toAccountId}_${Math.round(amountUsd * 100)}`,
@@ -135,16 +157,18 @@ async function requestHumanApproval(
 export const tools = {
   lookupAccount: tool({
     description:
-      "Look up a customer account by id. Returns balance, holder, risk level and recent transactions. Always call this before acting on an account.",
+      "Look up the customer's account. Returns balance, holder, risk level and recent transactions, or { authorized: false } if it is not the customer's own account. Always call this before acting on an account.",
     inputSchema: z.object({
-      accountId: z.string().describe("Account id, e.g. 4815"),
+      accountId: z.string().describe("The customer's own account id"),
     }),
     execute: lookupAccount,
   }),
 
   issueRefund: tool({
-    description: "Issue a refund on an order. Only call AFTER any required human approval.",
+    description:
+      "Issue a refund on one of the customer's own orders. Only call AFTER any required human approval. Returns { authorized: false } if the account is not the customer's own.",
     inputSchema: z.object({
+      accountId: z.string().describe("The customer's own account id"),
       orderId: z.string(),
       amountUsd: z.number().positive().describe("Refund amount in USD"),
     }),

@@ -15,12 +15,23 @@ export const AGENT_MODEL = "claude-sonnet-4-6";
  * resume from the exact same point. The DurableAgent streams its reply into the run's
  * default writable stream, which the API route surfaces back to the browser.
  */
-export async function chatWorkflow(messages: ModelMessage[], instructions: string, caseId?: string) {
+export async function chatWorkflow(
+  messages: ModelMessage[],
+  instructions: string,
+  caseId?: string,
+  authedAccount?: string,
+) {
   "use workflow";
+
+  // Tell the agent which account the customer is signed in as, so "my account" resolves without
+  // asking. The tools still enforce it independently (defense in depth).
+  const sessionNote = authedAccount
+    ? `\n\n## Session\nThe customer is signed in as account ${authedAccount}. That is their own account — use it for "my account" / "my balance" / their orders, and refuse any other account.`
+    : "";
 
   const agent = new DurableAgent({
     model: anthropic(AGENT_MODEL),
-    instructions,
+    instructions: instructions + sessionNote,
     tools,
   });
 
@@ -29,7 +40,8 @@ export async function chatWorkflow(messages: ModelMessage[], instructions: strin
     writable: getWritable<UIMessageChunk>(),
     // Allow the agent to loop over tool calls (look up → maybe ask a human → act → confirm).
     stopWhen: stepCountIs(12),
-    // Flows to tools — requestHumanApproval uses caseId to deep-link Slack to the case timeline.
-    experimental_context: { caseId },
+    // Flows to tools: caseId deep-links Slack to the case; authedAccount enforces account-level
+    // authorization at the tool layer (the customer can only touch their own account).
+    experimental_context: { caseId, authedAccount },
   });
 }
