@@ -110,6 +110,17 @@ export async function executeTransfer(
   "use step";
   const authed = authedAccount(opts);
   if (authed && fromAccountId !== authed) return NOT_AUTHORIZED;
+  // Can't move more than the account actually holds — enforced in code, not just asked of the model.
+  const account = ACCOUNTS[fromAccountId];
+  if (account && amountUsd > account.balanceUsd) {
+    return {
+      ok: false as const,
+      error: "insufficient_funds" as const,
+      fromAccountId,
+      balanceUsd: account.balanceUsd,
+      amountUsd,
+    };
+  }
   return {
     ok: true as const,
     transferId: `tx_${fromAccountId}_${toAccountId}_${Math.round(amountUsd * 100)}`,
