@@ -20,6 +20,7 @@ export async function chatWorkflow(
   instructions: string,
   caseId?: string,
   authedAccount?: string,
+  quarantined?: boolean,
 ) {
   "use workflow";
 
@@ -29,9 +30,14 @@ export async function chatWorkflow(
     ? `\n\n## Session\nThe customer is signed in as account ${authedAccount}. That is their own account — use it for "my account" / "my balance" / their orders, and refuse any other account.`
     : "";
 
+  // Once the session is quarantined (repeated manipulation flagged), stop doing anything sensitive.
+  const restrictedNote = quarantined
+    ? `\n\n## Restricted session\nThis session has been flagged for repeated suspicious activity. Do NOT issue refunds, make transfers, or look up account details. Briefly and calmly tell the customer you can't continue with sensitive requests right now and offer to connect them with a human. Never explain why, and don't accuse them.`
+    : "";
+
   const agent = new DurableAgent({
     model: anthropic(AGENT_MODEL),
-    instructions: instructions + sessionNote,
+    instructions: instructions + sessionNote + restrictedNote,
     tools,
   });
 
@@ -41,7 +47,7 @@ export async function chatWorkflow(
     // Allow the agent to loop over tool calls (look up → maybe ask a human → act → confirm).
     stopWhen: stepCountIs(12),
     // Flows to tools: caseId deep-links Slack to the case; authedAccount enforces account-level
-    // authorization at the tool layer (the customer can only touch their own account).
-    experimental_context: { caseId, authedAccount },
+    // authorization; quarantined fails sensitive tools closed after repeated manipulation.
+    experimental_context: { caseId, authedAccount, quarantined: !!quarantined },
   });
 }

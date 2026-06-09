@@ -73,6 +73,11 @@ const DEMO_ACCOUNTS = [
   },
 ];
 
+// Honest customers slip up; attackers insist. The agent only flags genuine manipulation, and a
+// session is locked for sensitive actions once it accumulates this many flags.
+const SECURITY_QUARANTINE_THRESHOLD = 2;
+const quarantinedFromFlags = (flags: number): boolean => flags >= SECURITY_QUARANTINE_THRESHOLD;
+
 const STATUS_META: Record<CaseStatus, { label: string; text: string; dot: string }> = {
   "pending-approval": { label: "Awaiting approval", text: "text-amber-400", dot: "bg-amber-400" },
   approved: { label: "Approved", text: "text-emerald-400", dot: "bg-emerald-400" },
@@ -181,6 +186,7 @@ export default function Home() {
   const pending = timeline.find((e) => e.kind === "approval-request" && e.approvalToken);
   const account = DEMO_ACCOUNTS.find((a) => a.id === authAccount) ?? DEMO_ACCOUNTS[0];
   const identity = ACCOUNT_DIRECTORY[authAccount];
+  const quarantined = quarantinedFromFlags(summary.securityFlags);
 
   // Operator-console metadata for the active case (category, country, response time, cost).
   const activeCase = cases.find((c) => c.id === activeId);
@@ -204,7 +210,7 @@ export default function Home() {
     if (!trimmed || busy) return;
     sendMessage(
       { text: trimmed },
-      { body: { instructions, caseId: activeId, authenticatedAccountId: authAccount } },
+      { body: { instructions, caseId: activeId, authenticatedAccountId: authAccount, quarantined } },
     );
     setInput("");
     setTab("chat");
@@ -321,6 +327,7 @@ export default function Home() {
               examples={account.examples}
               identity={identity}
               accountId={authAccount}
+              restricted={quarantined}
               onExample={submit}
             />
           )}
@@ -423,6 +430,7 @@ function ChatTab({
   examples,
   identity,
   accountId,
+  restricted,
   onExample,
 }: {
   messages: UIMessage[];
@@ -431,6 +439,7 @@ function ChatTab({
   examples: string[];
   identity?: DirectoryEntry;
   accountId: string;
+  restricted: boolean;
   onExample: (text: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -441,6 +450,12 @@ function ChatTab({
   return (
     <div ref={scrollRef} className="h-full overflow-y-auto">
       <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 py-6">
+        {restricted && (
+          <div className="flex items-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2.5 text-sm text-rose-300">
+            <span aria-hidden>🔒</span>
+            This session is restricted after repeated suspicious activity — sensitive actions are paused.
+          </div>
+        )}
         {messages.length === 0 ? (
           <div className="mt-[8vh] flex flex-col items-center text-center">
             {identity && (
@@ -634,7 +649,8 @@ function CaseListPanel({
 
       <div className="divide-y divide-zinc-800/70 overflow-hidden rounded-xl border border-zinc-800">
         {cases.map((c) => {
-          const status = STATUS_META[deriveSummary(c.messages).status];
+          const s = deriveSummary(c.messages);
+          const status = STATUS_META[s.status];
           const dir = ACCOUNT_DIRECTORY[c.accountId ?? ""];
           const cost = estimateCost(c.messages, instructions);
           return (
@@ -648,6 +664,14 @@ function CaseListPanel({
               <span className="min-w-0 flex-1">
                 <span className="flex items-baseline gap-2">
                   <span className="truncate text-sm text-zinc-100">{c.title}</span>
+                  {s.securityFlags > 0 && (
+                    <span
+                      className="shrink-0 text-[11px] text-rose-400"
+                      title={`${s.securityFlags} security flag${s.securityFlags > 1 ? "s" : ""}`}
+                    >
+                      🚨
+                    </span>
+                  )}
                   <span className={`shrink-0 text-[11px] ${status.text}`}>{status.label}</span>
                 </span>
                 <span className="mt-0.5 block truncate text-xs text-zinc-500">
@@ -797,6 +821,19 @@ function EngineeringTab({
         </div>
       </div>
 
+      {summary.securityFlags > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-x-2 rounded-xl border border-rose-500/40 bg-rose-500/5 px-4 py-2.5 text-sm">
+          <span className="font-semibold text-rose-300">
+            🚨 {summary.securityFlags} security flag{summary.securityFlags > 1 ? "s" : ""}
+          </span>
+          <span className="text-zinc-400">
+            {quarantinedFromFlags(summary.securityFlags)
+              ? "— session restricted; sensitive actions are blocked in code"
+              : "— manipulation attempt detected and refused (logged for review)"}
+          </span>
+        </div>
+      )}
+
       {pending && pending.approvalToken && (
         <div className="mb-4">
           <ApprovalCard event={pending} approving={approving} onResolve={onResolve} />
@@ -888,6 +925,7 @@ const EVENT_DOT: Record<TraceEvent["kind"], string> = {
   tool: "bg-teal-400",
   "approval-request": "bg-amber-400",
   "approval-resolved": "bg-emerald-400",
+  security: "bg-rose-500",
 };
 
 function TimelineItem({ event, at }: { event: TraceEvent; at?: number }) {

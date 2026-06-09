@@ -2,6 +2,7 @@ import {
   approvalBlocks,
   isSlackConfigured,
   resolvedBlocks,
+  securityAlertBlocks,
   slack,
   type ApprovalDetails,
   type ApprovalRouting,
@@ -42,6 +43,25 @@ export async function postApprovalToSlack(
     // Don't let a Slack misconfig break the run — fall back to in-app approval.
     console.error("[slack] postMessage failed:", err instanceof Error ? err.message : err);
     return null;
+  }
+}
+
+/** Post a security alert (best-effort) when the agent flags a manipulation attempt. */
+export async function postSecurityAlertToSlack(
+  detail: { type: string; reason?: string; quarantined?: boolean },
+  caseId?: string,
+): Promise<void> {
+  "use step";
+  if (!isSlackConfigured()) return;
+  const channel = process.env.SLACK_APPROVAL_CHANNEL_ID as string;
+  try {
+    await slack().chat.postMessage({
+      channel,
+      text: `Security alert: possible ${detail.type}`,
+      blocks: securityAlertBlocks(detail, engineeringUrl(caseId)),
+    });
+  } catch (err) {
+    console.error("[slack] security alert failed:", err instanceof Error ? err.message : err);
   }
 }
 

@@ -7,9 +7,6 @@ export type ApprovalDetails = {
   riskLevel?: string;
 };
 
-/** Approver escalation ladder, low → high. Fallback when the policy supplies none. */
-export const DEFAULT_TIERS = ["Support", "Finance", "Compliance"] as const;
-
 /** Where an approval currently sits in the escalation ladder. Travels inside the Slack button value. */
 export type ApprovalRouting = {
   tiers: string[]; // ordered ladder, low → high
@@ -181,6 +178,42 @@ export function resolvedBlocks(
   return [
     { type: "section", text: { type: "mrkdwn", text: `*${d.summary ?? d.action ?? "Approval"}*` } },
     { type: "context", elements: [{ type: "mrkdwn", text: `${verdict}${by}${tier}${esc}${note}` }] },
+  ];
+}
+
+/** A security alert posted when the agent detects (and refuses) a manipulation attempt. */
+export function securityAlertBlocks(
+  d: { type: string; reason?: string; quarantined?: boolean },
+  detailsUrl?: string,
+): KnownBlock[] {
+  const kind = d.type.replace(/_/g, " ");
+  return [
+    { type: "header", text: { type: "plain_text", text: "🚨 Security alert", emoji: true } },
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: d.quarantined
+          ? `Repeated suspicious activity — session *restricted*. Last signal: *${kind}*.`
+          : `Possible *${kind}* detected and refused.`,
+      },
+    },
+    ...(d.reason ? [{ type: "context" as const, elements: [{ type: "mrkdwn" as const, text: d.reason }] }] : []),
+    ...(detailsUrl
+      ? [
+          {
+            type: "actions" as const,
+            elements: [
+              {
+                type: "button" as const,
+                action_id: APPROVAL_ACTIONS.details,
+                text: { type: "plain_text" as const, text: "View case" },
+                url: detailsUrl,
+              },
+            ],
+          },
+        ]
+      : []),
   ];
 }
 

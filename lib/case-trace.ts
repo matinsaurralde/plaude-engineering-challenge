@@ -17,7 +17,8 @@ export type TraceEventKind =
   | "agent"
   | "tool"
   | "approval-request"
-  | "approval-resolved";
+  | "approval-resolved"
+  | "security";
 
 export type TraceEvent = {
   key: string; // stable key, used to stamp first-seen timestamps client-side
@@ -43,6 +44,7 @@ export type CaseSummary = {
   };
   steps: number;
   toolCalls: number;
+  securityFlags: number;
 };
 
 // ── small safe accessors (keep this module free of `any`) ────────────────────
@@ -168,6 +170,20 @@ export function buildTimeline(messages: UIMessage[]): TraceEvent[] {
       const t = asTool(part);
       if (!t) return;
 
+      if (t.name === "flagSecurityConcern") {
+        events.push({
+          key: `${m.id}:${i}:security`,
+          kind: "security",
+          title: `Security flag — ${str(t.input.type)?.replace(/_/g, " ") ?? "concern"}`,
+          detail: str(t.input.reason),
+          why: "A manipulation attempt was detected and refused — logged for review.",
+          status: "denied",
+          input: t.input,
+          output: t.output,
+        });
+        return;
+      }
+
       if (t.name === "requestHumanApproval") {
         const pending = t.state === "input-available" || t.state === "input-streaming";
         const approved = bool(t.output.approved);
@@ -234,6 +250,7 @@ export function deriveSummary(messages: UIMessage[]): CaseSummary {
   let toolCalls = 0;
   let pending = false;
   let handledAction = false;
+  let securityFlags = 0;
 
   for (const m of messages) {
     for (const part of partsOf(m)) {
@@ -242,6 +259,8 @@ export function deriveSummary(messages: UIMessage[]): CaseSummary {
       const t = asTool(part);
       if (!t) continue;
       toolCalls += 1;
+
+      if (t.name === "flagSecurityConcern") securityFlags += 1;
 
       if (t.name === "lookupAccount" && bool(t.output.found)) {
         account = {
@@ -290,7 +309,7 @@ export function deriveSummary(messages: UIMessage[]): CaseSummary {
   else if (handledAction || messages.some((m) => m.role === "assistant")) status = "handled";
   else status = "active";
 
-  return { status, account, operation, approval, steps, toolCalls };
+  return { status, account, operation, approval, steps, toolCalls, securityFlags };
 }
 
 /** A clean, downloadable/clipboard-able JSON snapshot of the whole case. */
