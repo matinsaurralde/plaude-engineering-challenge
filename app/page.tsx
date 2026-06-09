@@ -623,6 +623,46 @@ function CaseListPanel({
   onOpen: (id: string) => void;
   onNew: () => void;
 }) {
+  const [statusFilter, setStatusFilter] = useState<CaseStatus | "all">("all");
+  const [acctFilter, setAcctFilter] = useState("all");
+  const [catFilter, setCatFilter] = useState("all");
+
+  // Derive each case's metadata once, so filtering and rendering don't recompute it per row.
+  const rows = useMemo(
+    () =>
+      cases.map((c) => {
+        const summary = deriveSummary(c.messages);
+        return {
+          c,
+          status: summary.status,
+          securityFlags: summary.securityFlags,
+          accountId: c.accountId ?? "",
+          leaf: categorize(c.messages).leaf,
+          description: caseDescription(c.messages),
+          cost: estimateCost(c.messages, instructions),
+        };
+      }),
+    [cases, instructions],
+  );
+
+  const pendingCount = rows.filter((r) => r.status === "pending-approval").length;
+  const statuses = Array.from(new Set(rows.map((r) => r.status)));
+  const accounts = Array.from(new Set(rows.map((r) => r.accountId).filter(Boolean)));
+  const categories = Array.from(new Set(rows.map((r) => r.leaf))).sort();
+
+  const filtered = rows.filter(
+    (r) =>
+      (statusFilter === "all" || r.status === statusFilter) &&
+      (acctFilter === "all" || r.accountId === acctFilter) &&
+      (catFilter === "all" || r.leaf === catFilter),
+  );
+  const anyFilter = statusFilter !== "all" || acctFilter !== "all" || catFilter !== "all";
+  const clearFilters = () => {
+    setStatusFilter("all");
+    setAcctFilter("all");
+    setCatFilter("all");
+  };
+
   if (cases.length === 0) {
     return (
       <div className="grid h-full place-items-center">
@@ -641,58 +681,147 @@ function CaseListPanel({
 
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-6">
-      <div className="mb-4 flex items-center gap-2">
+      <div className="mb-3 flex items-center gap-2">
         <h2 className="text-sm font-semibold text-zinc-200">Cases</h2>
         <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-[11px] text-zinc-400">{cases.length}</span>
         <span className="ml-auto text-[11px] text-zinc-600">Operator console · click a case to open</span>
       </div>
 
+      {/* Pending approvals — the operator's actionable queue, surfaced first */}
+      {pendingCount > 0 && (
+        <button
+          onClick={() => setStatusFilter(statusFilter === "pending-approval" ? "all" : "pending-approval")}
+          className={`mb-3 flex w-full items-center gap-2 rounded-xl border px-4 py-2.5 text-sm transition ${
+            statusFilter === "pending-approval"
+              ? "border-amber-500/60 bg-amber-500/10"
+              : "border-amber-500/30 bg-amber-500/5 hover:bg-amber-500/10"
+          }`}
+        >
+          <span className="size-1.5 animate-pulse rounded-full bg-amber-400" />
+          <span className="font-medium text-amber-300">
+            {pendingCount} approval{pendingCount > 1 ? "s" : ""} awaiting review
+          </span>
+          <span className="ml-auto text-[11px] text-amber-400/70">
+            {statusFilter === "pending-approval" ? "showing only these · clear" : "show only these →"}
+          </span>
+        </button>
+      )}
+
+      {/* Filters: status · account · category */}
+      <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
+        <FilterSelect
+          label="Status"
+          value={statusFilter}
+          onChange={(v) => setStatusFilter(v as CaseStatus | "all")}
+          options={[["all", "All statuses"], ...statuses.map((s) => [s, STATUS_META[s].label] as [string, string])]}
+        />
+        <FilterSelect
+          label="Account"
+          value={acctFilter}
+          onChange={setAcctFilter}
+          options={[
+            ["all", "All accounts"],
+            ...accounts.map(
+              (id) =>
+                [
+                  id,
+                  `${flagEmoji(ACCOUNT_DIRECTORY[id]?.country)} ${ACCOUNT_DIRECTORY[id]?.holder ?? "Account"} · #${id}`,
+                ] as [string, string],
+            ),
+          ]}
+        />
+        <FilterSelect
+          label="Category"
+          value={catFilter}
+          onChange={setCatFilter}
+          options={[["all", "All categories"], ...categories.map((l) => [l, l] as [string, string])]}
+        />
+        {anyFilter && (
+          <button onClick={clearFilters} className="text-zinc-500 transition hover:text-zinc-300">
+            Clear
+          </button>
+        )}
+        <span className="ml-auto text-zinc-600">
+          {filtered.length} of {rows.length}
+        </span>
+      </div>
+
       <div className="divide-y divide-zinc-800/70 overflow-hidden rounded-xl border border-zinc-800">
-        {cases.map((c) => {
-          const s = deriveSummary(c.messages);
-          const status = STATUS_META[s.status];
-          const dir = ACCOUNT_DIRECTORY[c.accountId ?? ""];
-          const cost = estimateCost(c.messages, instructions);
-          return (
-            <button
-              key={c.id}
-              onClick={() => onOpen(c.id)}
-              className="flex w-full items-center gap-4 px-4 py-3 text-left transition hover:bg-zinc-900/50"
-            >
-              <span className={`size-2 shrink-0 rounded-full ${status.dot}`} />
+        {filtered.length === 0 ? (
+          <div className="px-4 py-10 text-center text-sm text-zinc-600">No cases match these filters.</div>
+        ) : (
+          filtered.map((r) => {
+            const c = r.c;
+            const sMeta = STATUS_META[r.status];
+            const dir = ACCOUNT_DIRECTORY[r.accountId];
+            return (
+              <button
+                key={c.id}
+                onClick={() => onOpen(c.id)}
+                className="flex w-full items-center gap-4 px-4 py-3 text-left transition hover:bg-zinc-900/50"
+              >
+                <span className={`size-2 shrink-0 rounded-full ${sMeta.dot}`} />
 
-              <span className="min-w-0 flex-1">
-                <span className="flex items-baseline gap-2">
-                  <span className="truncate text-sm text-zinc-100">{c.title}</span>
-                  {s.securityFlags > 0 && (
-                    <span
-                      className="shrink-0 text-[11px] text-rose-400"
-                      title={`${s.securityFlags} security flag${s.securityFlags > 1 ? "s" : ""}`}
-                    >
-                      🚨
-                    </span>
-                  )}
-                  <span className={`shrink-0 text-[11px] ${status.text}`}>{status.label}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-baseline gap-2">
+                    <span className="truncate text-sm text-zinc-100">{c.title}</span>
+                    {r.securityFlags > 0 && (
+                      <span
+                        className="shrink-0 text-[11px] text-rose-400"
+                        title={`${r.securityFlags} security flag${r.securityFlags > 1 ? "s" : ""}`}
+                      >
+                        🚨
+                      </span>
+                    )}
+                    <span className={`shrink-0 text-[11px] ${sMeta.text}`}>{sMeta.label}</span>
+                  </span>
+                  <span className="mt-0.5 block truncate text-xs text-zinc-500">{r.description}</span>
                 </span>
-                <span className="mt-0.5 block truncate text-xs text-zinc-500">
-                  {caseDescription(c.messages)}
-                </span>
-              </span>
 
-              <span className="hidden shrink-0 flex-col items-end gap-0.5 text-[11px] text-zinc-500 sm:flex">
-                <span title={dir?.countryName}>
-                  {flagEmoji(dir?.country)} {formatDate(c.createdAt)}
+                <span className="hidden shrink-0 flex-col items-end gap-0.5 text-[11px] text-zinc-500 sm:flex">
+                  <span title={dir?.countryName}>
+                    {flagEmoji(dir?.country)} {formatDate(c.createdAt)}
+                  </span>
+                  <span className="flex items-center gap-3">
+                    <span>{formatDuration(responseTimeMs(c.createdAt, c.updatedAt))}</span>
+                    <span className="font-mono text-zinc-400">{formatUsd(r.cost.usd)}</span>
+                  </span>
                 </span>
-                <span className="flex items-center gap-3">
-                  <span>{formatDuration(responseTimeMs(c.createdAt, c.updatedAt))}</span>
-                  <span className="font-mono text-zinc-400">{formatUsd(cost.usd)}</span>
-                </span>
-              </span>
-            </button>
-          );
-        })}
+              </button>
+            );
+          })
+        )}
       </div>
     </div>
+  );
+}
+
+function FilterSelect({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: [string, string][];
+}) {
+  return (
+    <label className="flex items-center gap-1.5 text-zinc-500">
+      <span className="hidden sm:inline">{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-200 outline-none focus:border-zinc-500"
+      >
+        {options.map(([v, l]) => (
+          <option key={v} value={v}>
+            {l}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 
