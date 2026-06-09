@@ -20,12 +20,18 @@ export async function postApprovalToSlack(
   "use step";
   if (!isSlackConfigured()) return null;
   const channel = process.env.SLACK_APPROVAL_CHANNEL_ID as string;
-  const res = await slack().chat.postMessage({
-    channel,
-    text: `Approval required: ${details.action ?? details.summary ?? "action"}`,
-    blocks: approvalBlocks(details, token),
-  });
-  return typeof res.ts === "string" ? { channel, ts: res.ts } : null;
+  try {
+    const res = await slack().chat.postMessage({
+      channel,
+      text: `Approval required: ${details.action ?? details.summary ?? "action"}`,
+      blocks: approvalBlocks(details, token),
+    });
+    return typeof res.ts === "string" ? { channel, ts: res.ts } : null;
+  } catch (err) {
+    // Don't let a Slack misconfig break the run — fall back to in-app approval.
+    console.error("[slack] postMessage failed:", err instanceof Error ? err.message : err);
+    return null;
+  }
 }
 
 /** Edit the original Slack message to show the final decision (also durable). */
@@ -36,10 +42,14 @@ export async function resolveSlackMessage(
 ): Promise<void> {
   "use step";
   if (!ref || !isSlackConfigured()) return;
-  await slack().chat.update({
-    channel: ref.channel,
-    ts: ref.ts,
-    text: decision.approved ? "Approved" : "Denied",
-    blocks: resolvedBlocks(details, decision),
-  });
+  try {
+    await slack().chat.update({
+      channel: ref.channel,
+      ts: ref.ts,
+      text: decision.approved ? "Approved" : "Denied",
+      blocks: resolvedBlocks(details, decision),
+    });
+  } catch (err) {
+    console.error("[slack] chat.update failed:", err instanceof Error ? err.message : err);
+  }
 }
