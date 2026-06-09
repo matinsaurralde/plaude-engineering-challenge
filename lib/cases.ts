@@ -5,6 +5,8 @@ export type StoredCase = {
   id: string;
   title: string;
   createdAt: number;
+  updatedAt?: number; // last time the case settled — drives total response time
+  accountId?: string; // which signed-in account the case belongs to (Cust ID + country)
   messages: UIMessage[];
 };
 

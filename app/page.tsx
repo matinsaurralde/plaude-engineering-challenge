@@ -23,8 +23,32 @@ import {
   titleFromMessages,
   type StoredCase,
 } from "@/lib/cases";
+import {
+  ACCOUNT_DIRECTORY,
+  categorize,
+  estimateCost,
+  flagEmoji,
+  formatDate,
+  formatDuration,
+  formatUsd,
+  responseTimeMs,
+  type CaseCategory,
+  type CostEstimate,
+  type DirectoryEntry,
+} from "@/lib/case-meta";
 
 type Tab = "chat" | "engineering" | "instructions";
+type EngView = "list" | "detail";
+type CaseMeta = {
+  id: string;
+  title: string;
+  createdAt: number;
+  accountId: string;
+  category: CaseCategory;
+  responseMs: number;
+  cost: CostEstimate;
+  operationRef?: string;
+};
 
 // The demo has no auth, so the UI lets you pick which customer you're "signed in" as. The tools
 // enforce that you can only touch this account (see docs/adr/0001-guardrails.md). Each account
@@ -66,6 +90,7 @@ export default function Home() {
   const [activeId, setActiveId] = useState("");
   const [times, setTimes] = useState<Record<string, number>>({});
   const [approving, setApproving] = useState(false);
+  const [engView, setEngView] = useState<EngView>("list");
 
   const busy = status === "submitted" || status === "streaming";
 
@@ -88,6 +113,8 @@ export default function Home() {
     if (target) {
       setActiveId(target.id);
       setMessages(target.messages);
+      // A Slack deep link points at one case — drop the operator straight into its detail view.
+      if (wantCase && target.id === wantCase) setEngView("detail");
     } else {
       setActiveId(newCaseId());
     }
@@ -108,18 +135,28 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- persisting a settled or paused conversation
     setCases((prev) => {
       const existing = prev.find((c) => c.id === activeId);
+      const now = Date.now();
       const next: StoredCase[] = existing
         ? prev.map((c) =>
-            c.id === activeId ? { ...c, title: titleFromMessages(messages), messages } : c,
+            c.id === activeId
+              ? { ...c, title: titleFromMessages(messages), messages, updatedAt: now }
+              : c,
           )
         : [
-            { id: activeId, title: titleFromMessages(messages), createdAt: Date.now(), messages },
+            {
+              id: activeId,
+              title: titleFromMessages(messages),
+              createdAt: now,
+              updatedAt: now,
+              accountId: authAccount,
+              messages,
+            },
             ...prev,
           ];
       saveCases(next);
       return next;
     });
-  }, [messages, activeId, busy]);
+  }, [messages, activeId, busy, authAccount]);
 
   // Stamp the wall-clock time each timeline event was first observed.
   useEffect(() => {
@@ -141,6 +178,23 @@ export default function Home() {
   const summary = useMemo(() => deriveSummary(messages), [messages]);
   const pending = timeline.find((e) => e.kind === "approval-request" && e.approvalToken);
   const account = DEMO_ACCOUNTS.find((a) => a.id === authAccount) ?? DEMO_ACCOUNTS[0];
+  const identity = ACCOUNT_DIRECTORY[authAccount];
+
+  // Operator-console metadata for the active case (category, country, response time, cost).
+  const activeCase = cases.find((c) => c.id === activeId);
+  const caseMeta = useMemo<CaseMeta>(() => {
+    const createdAt = activeCase?.createdAt ?? Date.now();
+    return {
+      id: activeId,
+      title: titleFromMessages(messages),
+      createdAt,
+      accountId: activeCase?.accountId ?? authAccount,
+      category: categorize(messages),
+      responseMs: responseTimeMs(createdAt, activeCase?.updatedAt),
+      cost: estimateCost(messages, instructions),
+      operationRef: summary.operation?.ref,
+    };
+  }, [messages, activeCase, authAccount, instructions, summary, activeId]);
 
   function submit(text: string) {
     const trimmed = text.trim();
@@ -169,6 +223,15 @@ export default function Home() {
     setActiveId(id);
     setMessages(c.messages);
     setTab("chat");
+  }
+
+  function openCaseInEng(id: string) {
+    const c = cases.find((x) => x.id === id);
+    if (!c) return;
+    setActiveId(id);
+    setMessages(c.messages);
+    setEngView("detail");
+    setTab("engineering");
   }
 
   function newCase() {
@@ -218,10 +281,15 @@ export default function Home() {
             >
               {DEMO_ACCOUNTS.map((a) => (
                 <option key={a.id} value={a.id}>
-                  {a.holder} · #{a.id}
+                  {flagEmoji(ACCOUNT_DIRECTORY[a.id]?.country)} {a.holder} · #{a.id}
                 </option>
               ))}
             </select>
+            {identity && (
+              <span className="hidden items-center gap-1 md:inline-flex">
+                · Balance <span className="font-medium text-zinc-300">{money(identity.balanceUsd)}</span>
+              </span>
+            )}
           </label>
           <nav className="flex gap-1 rounded-lg border border-zinc-800 bg-zinc-900 p-1 text-xs">
             {(["chat", "engineering", "instructions"] as Tab[]).map((t) => (
@@ -248,33 +316,36 @@ export default function Home() {
               busy={busy}
               pending={!!pending}
               examples={account.examples}
+              identity={identity}
+              accountId={authAccount}
               onExample={submit}
             />
           )}
-          {tab === "engineering" && (
-            <EngineeringTab
-              summary={summary}
-              timeline={timeline}
-              times={times}
-              instructions={instructions}
-              empty={messages.length === 0}
-              pending={pending}
-              approving={approving}
-              onResolve={resolveApproval}
-              onExport={() =>
-                buildExport(
-                  {
-                    id: activeId,
-                    title: titleFromMessages(messages),
-                    createdAt: cases.find((c) => c.id === activeId)?.createdAt ?? Date.now(),
-                  },
-                  instructions,
-                  messages,
-                  times,
-                )
-              }
-            />
-          )}
+          {tab === "engineering" &&
+            (engView === "list" ? (
+              <CaseListPanel cases={cases} instructions={instructions} onOpen={openCaseInEng} onNew={newCase} />
+            ) : (
+              <EngineeringTab
+                summary={summary}
+                timeline={timeline}
+                times={times}
+                instructions={instructions}
+                meta={caseMeta}
+                empty={messages.length === 0}
+                pending={pending}
+                approving={approving}
+                onBack={() => setEngView("list")}
+                onResolve={resolveApproval}
+                onExport={() =>
+                  buildExport(
+                    { id: activeId, title: caseMeta.title, createdAt: caseMeta.createdAt },
+                    instructions,
+                    messages,
+                    times,
+                  )
+                }
+              />
+            ))}
           {tab === "instructions" && (
             <InstructionsTab value={instructions} onChange={updateInstructions} />
           )}
@@ -347,12 +418,16 @@ function ChatTab({
   busy,
   pending,
   examples,
+  identity,
+  accountId,
   onExample,
 }: {
   messages: UIMessage[];
   busy: boolean;
   pending: boolean;
   examples: string[];
+  identity?: DirectoryEntry;
+  accountId: string;
   onExample: (text: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -364,7 +439,23 @@ function ChatTab({
     <div ref={scrollRef} className="h-full overflow-y-auto">
       <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 py-6">
         {messages.length === 0 ? (
-          <div className="mt-[10vh] flex flex-col items-center text-center">
+          <div className="mt-[8vh] flex flex-col items-center text-center">
+            {identity && (
+              <div className="mb-6 w-full max-w-sm rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-3 text-left">
+                <div className="flex items-center gap-2">
+                  <span className="text-base">{flagEmoji(identity.country)}</span>
+                  <span className="text-sm font-medium text-zinc-200">{identity.holder}</span>
+                  <span className="text-xs text-zinc-500">#{accountId}</span>
+                  <span className="ml-auto text-xs text-zinc-400">
+                    Balance <span className="font-medium text-zinc-200">{money(identity.balanceUsd)}</span>
+                  </span>
+                </div>
+                <p className="mt-2 text-[11px] leading-relaxed text-zinc-500">
+                  You&apos;re signed in as this account — the agent only ever acts on <span className="text-zinc-300">your own</span> account.
+                  Switch accounts (top right) to try other balances, or ask about someone else&apos;s account to watch it refuse.
+                </p>
+              </div>
+            )}
             <h2 className="text-lg font-medium text-zinc-300">What can I help you with?</h2>
             <p className="mt-1 max-w-sm text-sm text-zinc-500">
               Try a small refund (instant) vs. a large or high-risk one (pauses for human approval).
@@ -501,6 +592,129 @@ function ApprovalCard({
   );
 }
 
+// ── Engineering: case list (operator console) ────────────────────────────────
+
+function CaseListPanel({
+  cases,
+  instructions,
+  onOpen,
+  onNew,
+}: {
+  cases: StoredCase[];
+  instructions: string;
+  onOpen: (id: string) => void;
+  onNew: () => void;
+}) {
+  if (cases.length === 0) {
+    return (
+      <div className="grid h-full place-items-center">
+        <div className="text-center">
+          <p className="text-sm text-zinc-500">No cases yet.</p>
+          <button
+            onClick={onNew}
+            className="mt-3 rounded-lg bg-emerald-500 px-3.5 py-1.5 text-sm font-medium text-zinc-950 transition hover:bg-emerald-400"
+          >
+            Start a case
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-auto w-full max-w-5xl px-4 py-6">
+      <div className="mb-4 flex items-center gap-2">
+        <h2 className="text-sm font-semibold text-zinc-200">Cases</h2>
+        <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-[11px] text-zinc-400">{cases.length}</span>
+        <span className="ml-auto text-[11px] text-zinc-600">Operator console · click a case to open</span>
+      </div>
+
+      <div className="overflow-x-auto rounded-xl border border-zinc-800">
+        <div className="min-w-[720px]">
+          <div className="grid grid-cols-[10rem_1fr_5rem_7rem_6rem_5rem] gap-x-4 border-b border-zinc-800 bg-zinc-900/60 px-4 py-2 text-[10px] font-medium uppercase tracking-wider text-zinc-500">
+            <span>Status</span>
+            <span>Case</span>
+            <span>Country</span>
+            <span>Created</span>
+            <span>Response</span>
+            <span className="text-right">Cost</span>
+          </div>
+          <div className="divide-y divide-zinc-800/70">
+            {cases.map((c) => {
+              const status = STATUS_META[deriveSummary(c.messages).status];
+              const cat = categorize(c.messages);
+              const dir = ACCOUNT_DIRECTORY[c.accountId ?? ""];
+              const cost = estimateCost(c.messages, instructions);
+              return (
+                <button
+                  key={c.id}
+                  onClick={() => onOpen(c.id)}
+                  className="grid w-full grid-cols-[10rem_1fr_5rem_7rem_6rem_5rem] items-center gap-x-4 px-4 py-3 text-left transition hover:bg-zinc-900/60"
+                >
+                  <span className="flex items-center gap-1.5">
+                    <span className={`size-2 shrink-0 rounded-full ${status.dot}`} />
+                    <span className={`text-[11px] ${status.text}`}>{status.label}</span>
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm text-zinc-100">{c.title}</span>
+                    <span className="mt-0.5 block truncate text-[11px] text-sky-400/80">{cat.leaf}</span>
+                  </span>
+                  <span className="text-sm" title={dir?.countryName}>
+                    {flagEmoji(dir?.country)} <span className="text-[11px] text-zinc-500">{dir?.country ?? "—"}</span>
+                  </span>
+                  <span className="text-xs text-zinc-400">{formatDate(c.createdAt)}</span>
+                  <span className="text-xs text-zinc-400">{formatDuration(responseTimeMs(c.createdAt, c.updatedAt))}</span>
+                  <span className="text-right font-mono text-xs text-zinc-300">{formatUsd(cost.usd)}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BackToCases({ onBack }: { onBack: () => void }) {
+  return (
+    <button
+      onClick={onBack}
+      className="flex items-center gap-1.5 text-xs text-zinc-500 transition hover:text-zinc-300"
+    >
+      <span aria-hidden>←</span> All cases
+    </button>
+  );
+}
+
+function CopyId({ label, value }: { label: string; value?: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wider text-zinc-600">{label}</div>
+      {value ? (
+        <button
+          onClick={() => {
+            navigator.clipboard?.writeText(value).then(
+              () => {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1200);
+              },
+              () => {},
+            );
+          }}
+          className="mt-0.5 flex w-full items-center gap-1.5 font-mono text-xs text-zinc-300 transition hover:text-zinc-100"
+          title="Copy"
+        >
+          <span className="truncate">{value}</span>
+          <span className="shrink-0 text-zinc-600">{copied ? "✓" : "⧉"}</span>
+        </button>
+      ) : (
+        <div className="mt-0.5 font-mono text-xs text-zinc-600">—</div>
+      )}
+    </div>
+  );
+}
+
 // ── Engineering tab ──────────────────────────────────────────────────────────
 
 function EngineeringTab({
@@ -508,9 +722,11 @@ function EngineeringTab({
   timeline,
   times,
   instructions,
+  meta,
   empty,
   pending,
   approving,
+  onBack,
   onResolve,
   onExport,
 }: {
@@ -518,13 +734,16 @@ function EngineeringTab({
   timeline: TraceEvent[];
   times: Record<string, number>;
   instructions: string;
+  meta: CaseMeta;
   empty: boolean;
   pending: TraceEvent | undefined;
   approving: boolean;
+  onBack: () => void;
   onResolve: (token: string, approved: boolean, note: string) => void;
   onExport: () => object;
 }) {
   const [copied, setCopied] = useState(false);
+  const dir = ACCOUNT_DIRECTORY[meta.accountId];
 
   async function copyJson() {
     try {
@@ -548,16 +767,38 @@ function EngineeringTab({
 
   if (empty) {
     return (
-      <div className="grid h-full place-items-center text-sm text-zinc-600">
-        Send a message — the run trace shows up here.
+      <div className="mx-auto w-full max-w-3xl px-4 py-6">
+        <BackToCases onBack={onBack} />
+        <div className="mt-10 grid place-items-center text-sm text-zinc-600">
+          This case has no activity yet — send a message in Chat and the run trace shows up here.
+        </div>
       </div>
     );
   }
 
-  const meta = STATUS_META[summary.status];
+  const statusMeta = STATUS_META[summary.status];
 
   return (
     <div className="mx-auto w-full max-w-3xl px-4 py-6">
+      <BackToCases onBack={onBack} />
+
+      {/* Case identity — what this case is, who it's for, and its category */}
+      <div className="mt-3 mb-4">
+        <div className="flex items-start gap-3">
+          <h2 className="min-w-0 flex-1 text-lg font-semibold text-zinc-100">{meta.title}</h2>
+          <span className="shrink-0 pt-1 text-sm text-zinc-400" title={dir?.countryName}>
+            {flagEmoji(dir?.country)} {formatDate(meta.createdAt)}
+          </span>
+        </div>
+        <div className="mt-1.5 text-[11px] text-zinc-500">
+          <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-600">Category</span>
+          <span className="ml-2 text-sky-400/90">{meta.category.leaf}</span>
+          <span className="ml-2 text-zinc-600">
+            {meta.category.breadcrumb.join(" › ")} › {meta.category.leaf}
+          </span>
+        </div>
+      </div>
+
       {pending && pending.approvalToken && (
         <div className="mb-4">
           <ApprovalCard event={pending} approving={approving} onResolve={onResolve} />
@@ -567,8 +808,8 @@ function EngineeringTab({
       {/* Case header */}
       <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4">
         <div className="flex items-center gap-2">
-          <span className={`size-2 rounded-full ${meta.dot}`} />
-          <span className={`text-sm font-medium ${meta.text}`}>{meta.label}</span>
+          <span className={`size-2 rounded-full ${statusMeta.dot}`} />
+          <span className={`text-sm font-medium ${statusMeta.text}`}>{statusMeta.label}</span>
           <div className="ml-auto flex gap-2">
             <button
               onClick={copyJson}
@@ -607,7 +848,19 @@ function EngineeringTab({
               : "not required"}
           </Field>
           <Field label="Decided by">{summary.approval?.decision?.by ?? "—"}</Field>
+          <Field label="Response time">{formatDuration(meta.responseMs)}</Field>
+          <Field label="Cost of handling">{formatUsd(meta.cost.usd)} <span className="text-[10px] text-zinc-600">est.</span></Field>
         </div>
+      </div>
+
+      {/* Case IDs */}
+      <h3 className="mt-6 mb-2 text-xs font-medium uppercase tracking-wider text-zinc-500">
+        Case IDs
+      </h3>
+      <div className="grid grid-cols-2 gap-3 rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 sm:grid-cols-3">
+        <CopyId label="Case ID" value={meta.id} />
+        <CopyId label="Cust ID" value={meta.accountId} />
+        <CopyId label="Operation ref" value={meta.operationRef} />
       </div>
 
       {/* Timeline */}
