@@ -26,10 +26,25 @@ import {
 
 type Tab = "chat" | "engineering" | "instructions";
 
-const EXAMPLES = [
-  "Refund $12.50 on order o_4815 for account 4815",
-  "Refund $240 on order o_9000 for account 9000",
-  "Transfer $25,000 from account 2231 to account 9000",
+// The demo has no auth, so the UI lets you pick which customer you're "signed in" as. The tools
+// enforce that you can only touch this account (see docs/adr/0001-guardrails.md). Each account
+// ships example prompts that show the instant path, the approval path, and the data-leak defense.
+const DEMO_ACCOUNTS = [
+  {
+    id: "4815",
+    holder: "Acme Corp",
+    examples: ["What's my balance?", "Refund $12.50 on order o_4815", "Look up account 9000"],
+  },
+  {
+    id: "2231",
+    holder: "Globex SA",
+    examples: ["What's my balance?", "Transfer $25,000 to account 9000", "Look up account 4815"],
+  },
+  {
+    id: "9000",
+    holder: "Initech LLC",
+    examples: ["What's my balance?", "Refund $240 on order o_9000", "Look up account 2231"],
+  },
 ];
 
 const STATUS_META: Record<CaseStatus, { label: string; text: string; dot: string }> = {
@@ -45,6 +60,7 @@ export default function Home() {
   const { messages, sendMessage, status, setMessages } = useChat();
   const [tab, setTab] = useState<Tab>("chat");
   const [input, setInput] = useState("");
+  const [authAccount, setAuthAccount] = useState("9000");
   const [instructions, setInstructions] = useState(DEFAULT_INSTRUCTIONS);
   const [cases, setCases] = useState<StoredCase[]>([]);
   const [activeId, setActiveId] = useState("");
@@ -59,6 +75,8 @@ export default function Home() {
     const loaded = loadCases();
     setCases(loaded);
     setInstructions(loadInstructions(DEFAULT_INSTRUCTIONS));
+    const savedAcct = window.localStorage.getItem("matute.account.v1");
+    if (savedAcct) setAuthAccount(savedAcct);
 
     // Deep links from Slack: /?tab=engineering&case=<id>
     const params = new URLSearchParams(window.location.search);
@@ -122,13 +140,27 @@ export default function Home() {
   const timeline = useMemo(() => buildTimeline(messages), [messages]);
   const summary = useMemo(() => deriveSummary(messages), [messages]);
   const pending = timeline.find((e) => e.kind === "approval-request" && e.approvalToken);
+  const account = DEMO_ACCOUNTS.find((a) => a.id === authAccount) ?? DEMO_ACCOUNTS[0];
 
   function submit(text: string) {
     const trimmed = text.trim();
     if (!trimmed || busy) return;
-    sendMessage({ text: trimmed }, { body: { instructions, caseId: activeId } });
+    sendMessage(
+      { text: trimmed },
+      { body: { instructions, caseId: activeId, authenticatedAccountId: authAccount } },
+    );
     setInput("");
     setTab("chat");
+  }
+
+  function changeAccount(id: string) {
+    setAuthAccount(id);
+    try {
+      window.localStorage.setItem("matute.account.v1", id);
+    } catch {
+      // ignore
+    }
+    newCase();
   }
 
   function selectCase(id: string) {
@@ -177,7 +209,21 @@ export default function Home() {
             <h1 className="text-sm font-semibold">Matute</h1>
             <p className="text-xs text-zinc-500">Human-in-the-loop fintech agent</p>
           </div>
-          <nav className="ml-auto flex gap-1 rounded-lg border border-zinc-800 bg-zinc-900 p-1 text-xs">
+          <label className="ml-auto flex items-center gap-2 text-xs text-zinc-500">
+            <span className="hidden sm:inline">Signed in as</span>
+            <select
+              value={authAccount}
+              onChange={(e) => changeAccount(e.target.value)}
+              className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-200 outline-none focus:border-zinc-500"
+            >
+              {DEMO_ACCOUNTS.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.holder} · #{a.id}
+                </option>
+              ))}
+            </select>
+          </label>
+          <nav className="flex gap-1 rounded-lg border border-zinc-800 bg-zinc-900 p-1 text-xs">
             {(["chat", "engineering", "instructions"] as Tab[]).map((t) => (
               <button
                 key={t}
@@ -197,7 +243,13 @@ export default function Home() {
 
         <main className="min-h-0 flex-1 overflow-y-auto">
           {tab === "chat" && (
-            <ChatTab messages={messages} busy={busy} pending={!!pending} onExample={submit} />
+            <ChatTab
+              messages={messages}
+              busy={busy}
+              pending={!!pending}
+              examples={account.examples}
+              onExample={submit}
+            />
           )}
           {tab === "engineering" && (
             <EngineeringTab
@@ -294,11 +346,13 @@ function ChatTab({
   messages,
   busy,
   pending,
+  examples,
   onExample,
 }: {
   messages: UIMessage[];
   busy: boolean;
   pending: boolean;
+  examples: string[];
   onExample: (text: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -316,7 +370,7 @@ function ChatTab({
               Try a small refund (instant) vs. a large or high-risk one (pauses for human approval).
             </p>
             <div className="mt-6 flex flex-col gap-2">
-              {EXAMPLES.map((ex) => (
+              {examples.map((ex) => (
                 <button
                   key={ex}
                   onClick={() => onExample(ex)}
