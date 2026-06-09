@@ -36,6 +36,18 @@ workflow resumes exactly where it paused → agent finishes → streams back to 
 The durable workflow is the scalable backbone: a paused run consumes no compute, survives
 redeploys, and resumes deterministically. No database or queue to operate.
 
+## Tiered approvals & escalation
+
+Not every sign-off goes to the same desk. The plain-text policy defines an approver ladder —
+**Support → Finance → Compliance** — and which tier should see a given request first (a small
+refund vs. an action on a high-risk account). The Slack message shows the assigned tier, and a
+reviewer who isn't the right authority can **escalate it up the ladder with one button**: the
+durable run stays suspended on the *same* approval — only *who* is asked changes, entirely in
+Slack. The case timeline records the full escalation chain (who decided, and the path it took).
+
+This is the classic fintech **maker-checker / four-eyes** control, expressed in editable text
+instead of hardcoded routing.
+
 ## The core idea: behaviour is plain text
 
 The approval policy isn't code — it's an **editable text file** that travels with every
