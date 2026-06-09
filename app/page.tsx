@@ -25,6 +25,7 @@ import {
 } from "@/lib/cases";
 import {
   ACCOUNT_DIRECTORY,
+  caseDescription,
   categorize,
   estimateCost,
   flagEmoji,
@@ -42,6 +43,7 @@ type EngView = "list" | "detail";
 type CaseMeta = {
   id: string;
   title: string;
+  description: string;
   createdAt: number;
   accountId: string;
   category: CaseCategory;
@@ -187,6 +189,7 @@ export default function Home() {
     return {
       id: activeId,
       title: titleFromMessages(messages),
+      description: caseDescription(messages),
       createdAt,
       accountId: activeCase?.accountId ?? authAccount,
       category: categorize(messages),
@@ -642,7 +645,6 @@ function CaseListPanel({
           <div className="divide-y divide-zinc-800/70">
             {cases.map((c) => {
               const status = STATUS_META[deriveSummary(c.messages).status];
-              const cat = categorize(c.messages);
               const dir = ACCOUNT_DIRECTORY[c.accountId ?? ""];
               const cost = estimateCost(c.messages, instructions);
               return (
@@ -657,7 +659,9 @@ function CaseListPanel({
                   </span>
                   <span className="min-w-0">
                     <span className="block truncate text-sm text-zinc-100">{c.title}</span>
-                    <span className="mt-0.5 block truncate text-[11px] text-sky-400/80">{cat.leaf}</span>
+                    <span className="mt-0.5 block truncate text-[11px] text-zinc-500">
+                      {caseDescription(c.messages)}
+                    </span>
                   </span>
                   <span className="text-sm" title={dir?.countryName}>
                     {flagEmoji(dir?.country)} <span className="text-[11px] text-zinc-500">{dir?.country ?? "—"}</span>
@@ -790,6 +794,7 @@ function EngineeringTab({
             {flagEmoji(dir?.country)} {formatDate(meta.createdAt)}
           </span>
         </div>
+        <p className="mt-1 text-sm text-zinc-400">{meta.description}</p>
         <div className="mt-1.5 text-[11px] text-zinc-500">
           <span className="text-[10px] font-medium uppercase tracking-wider text-zinc-600">Category</span>
           <span className="ml-2 text-sky-400/90">{meta.category.leaf}</span>

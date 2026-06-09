@@ -1,4 +1,5 @@
 import type { UIMessage } from "ai";
+import { deriveSummary, money } from "@/lib/case-trace";
 
 // Derived, presentation-only case metadata for the operator console: category taxonomy,
 // customer country/flag, total response time, and an estimated LLM cost per case. All of it
@@ -88,6 +89,41 @@ export function categorize(messages: UIMessage[]): CaseCategory {
     return { breadcrumb: [ROOT, "User Accounts", "Account information"], leaf: "Balance & activity inquiry" };
   }
   return { breadcrumb: [ROOT, "General", "Support"], leaf: "General inquiry" };
+}
+
+// ── Brief case description ───────────────────────────────────────────────────
+// A one-line, fact-derived summary of what the case is about — independent of the title
+// (which is just whatever the customer typed first, and may be noise). Built from the
+// operation the agent performed and the outcome, falling back to the category.
+const OUTCOME: Record<string, string> = {
+  "pending-approval": "awaiting human approval",
+  approved: "approved",
+  denied: "denied",
+  handled: "handled",
+  active: "in progress",
+  idle: "new",
+};
+
+export function caseDescription(messages: UIMessage[]): string {
+  if (messages.length === 0) return "New case";
+  const s = deriveSummary(messages);
+  const cat = categorize(messages);
+
+  let head: string;
+  if (s.operation?.kind === "refund") {
+    const amt = s.operation.amountUsd != null ? ` ${money(s.operation.amountUsd)}` : "";
+    const ref = s.operation.ref ? ` on ${s.operation.ref}` : "";
+    head = `Refund${amt}${ref}`;
+  } else if (s.operation?.kind === "transfer") {
+    const amt = s.operation.amountUsd != null ? ` ${money(s.operation.amountUsd)}` : "";
+    const ref = s.operation.ref ? ` → account ${s.operation.ref}` : "";
+    head = `Transfer${amt}${ref}`;
+  } else {
+    head = cat.leaf;
+  }
+
+  const outcome = OUTCOME[s.status] ?? s.status;
+  return `${head} — ${outcome}`;
 }
 
 // ── Total response time ──────────────────────────────────────────────────────
