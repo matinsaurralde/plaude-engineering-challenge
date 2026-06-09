@@ -15,7 +15,7 @@ export const AGENT_MODEL = "claude-sonnet-4-6";
  * resume from the exact same point. The DurableAgent streams its reply into the run's
  * default writable stream, which the API route surfaces back to the browser.
  */
-export async function chatWorkflow(messages: ModelMessage[], instructions: string) {
+export async function chatWorkflow(messages: ModelMessage[], instructions: string, caseId?: string) {
   "use workflow";
 
   const agent = new DurableAgent({
@@ -29,5 +29,7 @@ export async function chatWorkflow(messages: ModelMessage[], instructions: strin
     writable: getWritable<UIMessageChunk>(),
     // Allow the agent to loop over tool calls (look up → maybe ask a human → act → confirm).
     stopWhen: stepCountIs(12),
+    // Flows to tools — requestHumanApproval uses caseId to deep-link Slack to the case timeline.
+    experimental_context: { caseId },
   });
 }

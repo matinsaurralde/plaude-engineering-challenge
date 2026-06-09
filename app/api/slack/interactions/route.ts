@@ -51,6 +51,10 @@ export async function POST(req: Request) {
   // Button click: Approve / Deny / Provide input
   if (payload.type === "block_actions") {
     const action = payload.actions?.[0];
+
+    // "View case details" is a URL button — Slack already opened the link, nothing to resume.
+    if (action?.action_id === APPROVAL_ACTIONS.details) return new Response(null, { status: 200 });
+
     const token = action?.value;
     if (!token) return new Response(null, { status: 200 });
 

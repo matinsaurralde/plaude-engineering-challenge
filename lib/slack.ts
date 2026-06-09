@@ -11,6 +11,7 @@ export const APPROVAL_ACTIONS = {
   approve: "approval_approve",
   deny: "approval_deny",
   input: "approval_input",
+  details: "approval_details", // URL button — opens the Engineering view, no decision
 } as const;
 
 export const INPUT_MODAL_CALLBACK = "approval_input_modal";
@@ -49,7 +50,7 @@ export function verifySlackSignature(rawBody: string, timestamp: string, signatu
 
 const RISK_EMOJI: Record<string, string> = { high: "🔴", medium: "🟠", low: "🟢" };
 
-export function approvalBlocks(d: ApprovalDetails, token: string): KnownBlock[] {
+export function approvalBlocks(d: ApprovalDetails, token: string, detailsUrl?: string): KnownBlock[] {
   const risk = d.riskLevel ?? "medium";
   return [
     { type: "header", text: { type: "plain_text", text: "🔒 Approval required", emoji: true } },
@@ -84,6 +85,16 @@ export function approvalBlocks(d: ApprovalDetails, token: string): KnownBlock[] 
           text: { type: "plain_text", text: "Provide input" },
           value: token,
         },
+        ...(detailsUrl
+          ? [
+              {
+                type: "button" as const,
+                action_id: APPROVAL_ACTIONS.details,
+                text: { type: "plain_text" as const, text: "View case details" },
+                url: detailsUrl,
+              },
+            ]
+          : []),
       ],
     },
   ];

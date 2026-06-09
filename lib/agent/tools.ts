@@ -101,14 +101,15 @@ export async function executeTransfer({
 
 async function requestHumanApproval(
   input: { summary: string; action: string; riskLevel: "low" | "medium" | "high" },
-  { toolCallId }: { toolCallId: string },
+  { toolCallId, experimental_context }: { toolCallId: string; experimental_context?: unknown },
 ): Promise<ApprovalDecision> {
   const details = { summary: input.summary, action: input.action, riskLevel: input.riskLevel };
+  const caseId = (experimental_context as { caseId?: string } | undefined)?.caseId;
 
   // Post to Slack (if configured), then suspend the durable run on a hook keyed by this tool
   // call. The Slack buttons and the in-app card both resume the very same token. Zero compute
   // is used while suspended.
-  const slackRef = await postApprovalToSlack(details, toolCallId);
+  const slackRef = await postApprovalToSlack(details, toolCallId, caseId);
   const hook = approvalHook.create({ token: toolCallId });
 
   const TIMED_OUT = Symbol("timed-out");

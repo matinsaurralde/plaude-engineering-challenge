@@ -8,6 +8,14 @@ import {
 
 export type SlackRef = { channel: string; ts: string };
 
+/** Deep link to the Engineering view (timeline) for a case. */
+function engineeringUrl(caseId?: string): string {
+  const base = process.env.APP_BASE_URL || "http://localhost:3001";
+  const params = new URLSearchParams({ tab: "engineering" });
+  if (caseId) params.set("case", caseId);
+  return `${base}/?${params.toString()}`;
+}
+
 /**
  * Post the approval request to Slack. Marked `"use step"` so it runs exactly once and is NOT
  * replayed when the workflow resumes after the human responds (otherwise every resume would
@@ -16,6 +24,7 @@ export type SlackRef = { channel: string; ts: string };
 export async function postApprovalToSlack(
   details: ApprovalDetails,
   token: string,
+  caseId?: string,
 ): Promise<SlackRef | null> {
   "use step";
   if (!isSlackConfigured()) return null;
@@ -24,7 +33,7 @@ export async function postApprovalToSlack(
     const res = await slack().chat.postMessage({
       channel,
       text: `Approval required: ${details.action ?? details.summary ?? "action"}`,
-      blocks: approvalBlocks(details, token),
+      blocks: approvalBlocks(details, token, engineeringUrl(caseId)),
     });
     return typeof res.ts === "string" ? { channel, ts: res.ts } : null;
   } catch (err) {

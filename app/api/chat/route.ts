@@ -11,18 +11,20 @@ import { DEFAULT_INSTRUCTIONS } from "@/lib/agent/instructions";
 export const maxDuration = 60;
 
 export async function POST(req: Request) {
-  const { messages, instructions } = (await req.json()) as {
+  const { messages, instructions, caseId } = (await req.json()) as {
     messages: UIMessage[];
     instructions?: string;
+    caseId?: string;
   };
 
   const modelMessages = await convertToModelMessages(messages);
 
   // Start a durable run of the chat workflow. The UI passes the (editable) plain-text
-  // instructions with each request; we fall back to the committed defaults.
+  // instructions and the case id with each request; we fall back to the committed defaults.
   const run = await start(chatWorkflow, [
     modelMessages,
     instructions?.trim() || DEFAULT_INSTRUCTIONS,
+    caseId,
   ]);
 
   // run.readable carries the UIMessageChunks the agent writes inside the workflow.
