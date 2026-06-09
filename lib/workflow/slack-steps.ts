@@ -4,6 +4,7 @@ import {
   resolvedBlocks,
   slack,
   type ApprovalDetails,
+  type ApprovalRouting,
 } from "@/lib/slack";
 
 export type SlackRef = { channel: string; ts: string };
@@ -25,6 +26,7 @@ export async function postApprovalToSlack(
   details: ApprovalDetails,
   token: string,
   caseId?: string,
+  routing?: ApprovalRouting,
 ): Promise<SlackRef | null> {
   "use step";
   if (!isSlackConfigured()) return null;
@@ -33,7 +35,7 @@ export async function postApprovalToSlack(
     const res = await slack().chat.postMessage({
       channel,
       text: `Approval required: ${details.action ?? details.summary ?? "action"}`,
-      blocks: approvalBlocks(details, token, engineeringUrl(caseId)),
+      blocks: approvalBlocks(details, token, { detailsUrl: engineeringUrl(caseId), routing }),
     });
     return typeof res.ts === "string" ? { channel, ts: res.ts } : null;
   } catch (err) {
@@ -47,7 +49,7 @@ export async function postApprovalToSlack(
 export async function resolveSlackMessage(
   ref: SlackRef | null,
   details: ApprovalDetails,
-  decision: { approved: boolean; by?: string; note?: string },
+  decision: { approved: boolean; by?: string; note?: string; tier?: string; escalatedFrom?: string[] },
 ): Promise<void> {
   "use step";
   if (!ref || !isSlackConfigured()) return;

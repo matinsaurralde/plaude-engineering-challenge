@@ -3,6 +3,7 @@ import { z } from "zod";
 import { sleep } from "workflow";
 import { approvalHook, type ApprovalDecision } from "@/lib/workflow/hooks";
 import { postApprovalToSlack, resolveSlackMessage } from "@/lib/workflow/slack-steps";
+import { DEFAULT_TIERS } from "@/lib/slack";
 
 // ── Simulated fintech back office ────────────────────────────────────────────
 // No database — a small in-memory fixture is enough to make the demo concrete.
@@ -122,16 +123,32 @@ export async function executeTransfer(
 // ── Human-in-the-loop tool (workflow-level, not a step — it suspends on a hook) ─
 
 async function requestHumanApproval(
-  input: { summary: string; action: string; riskLevel: "low" | "medium" | "high" },
+  input: {
+    summary: string;
+    action: string;
+    riskLevel: "low" | "medium" | "high";
+    tiers?: string[];
+    tierIndex?: number;
+  },
   { toolCallId, experimental_context }: { toolCallId: string; experimental_context?: unknown },
 ): Promise<ApprovalDecision> {
   const details = { summary: input.summary, action: input.action, riskLevel: input.riskLevel };
   const caseId = (experimental_context as { caseId?: string } | undefined)?.caseId;
 
+  // Approver tiers come from the plain-text policy (the model passes them); fall back to the
+  // default ladder so routing never breaks. A human can escalate up the ladder from Slack.
+  const tiers = input.tiers && input.tiers.length ? input.tiers : [...DEFAULT_TIERS];
+  // If the model routes by amount it sets tierIndex; otherwise default by risk so a high-risk
+  // action still lands on the top tier (Compliance) instead of silently sitting at tier 0.
+  const riskDefaultTier: Record<string, number> = { high: 2, medium: 1, low: 0 };
+  const rawIndex = input.tierIndex ?? riskDefaultTier[input.riskLevel] ?? 0;
+  const tierIndex = Math.min(Math.max(rawIndex, 0), tiers.length - 1);
+  const routing = { tiers, tierIndex, from: [] as string[] };
+
   // Post to Slack (if configured), then suspend the durable run on a hook keyed by this tool
   // call. The Slack buttons and the in-app card both resume the very same token. Zero compute
   // is used while suspended.
-  const slackRef = await postApprovalToSlack(details, toolCallId, caseId);
+  const slackRef = await postApprovalToSlack(details, toolCallId, caseId, routing);
   const hook = approvalHook.create({ token: toolCallId });
 
   const TIMED_OUT = Symbol("timed-out");
@@ -189,6 +206,7 @@ export const tools = {
     description:
       "Pause and ask a human to approve, deny, or provide input before a sensitive action. " +
       "Call this BEFORE the action whenever the instructions require human sign-off. " +
+      "Route it to the right approver tier via tiers + tierIndex (see the routing rules). " +
       "Returns { approved, note }. If approved is false, do not perform the action.",
     inputSchema: z.object({
       summary: z.string().describe("One-line summary of what needs approval"),
@@ -196,6 +214,16 @@ export const tools = {
         .string()
         .describe("The exact action taken if approved, e.g. 'refund $250 on order #4815'"),
       riskLevel: z.enum(["low", "medium", "high"]),
+      tiers: z
+        .array(z.string())
+        .optional()
+        .describe('Approver ladder from the policy, low → high, e.g. ["Support","Finance","Compliance"]'),
+      tierIndex: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe("Which tier should review first (0-based), per the routing rules"),
     }),
     execute: requestHumanApproval,
   }),

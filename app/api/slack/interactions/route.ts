@@ -1,8 +1,12 @@
-import { approvalHook } from "@/lib/workflow/hooks";
+import { approvalHook, type ApprovalDecision } from "@/lib/workflow/hooks";
 import {
+  approvalBlocks,
   APPROVAL_ACTIONS,
+  decodeApproval,
+  escalatedBlocks,
   inputModalView,
   isSlackConfigured,
+  resolvedBlocks,
   slack,
   verifySlackSignature,
 } from "@/lib/slack";
@@ -14,6 +18,7 @@ type SlackPayload = {
   user?: SlackUser;
   trigger_id?: string;
   actions?: SlackAction[];
+  container?: { channel_id?: string; message_ts?: string };
   view?: {
     private_metadata?: string;
     state?: { values?: Record<string, Record<string, { value?: string }>> };
@@ -24,7 +29,7 @@ function userName(u?: SlackUser): string {
   return u?.username ?? u?.name ?? u?.id ?? "slack";
 }
 
-async function resume(token: string, decision: { approved: boolean; by?: string; note?: string }) {
+async function resume(token: string, decision: ApprovalDecision) {
   try {
     await approvalHook.resume(token, decision);
   } catch {
@@ -48,16 +53,17 @@ export async function POST(req: Request) {
 
   const payload = JSON.parse(new URLSearchParams(raw).get("payload") ?? "{}") as SlackPayload;
 
-  // Button click: Approve / Deny / Provide input
+  // Button click: Approve / Deny / Provide input / Escalate
   if (payload.type === "block_actions") {
     const action = payload.actions?.[0];
 
     // "View case details" is a URL button — Slack already opened the link, nothing to resume.
     if (action?.action_id === APPROVAL_ACTIONS.details) return new Response(null, { status: 200 });
 
-    const token = action?.value;
+    const { token, routing, details, detailsUrl } = decodeApproval(action?.value);
     if (!token) return new Response(null, { status: 200 });
 
+    // Provide input → open the free-text modal, keyed to the same durable token.
     if (action?.action_id === APPROVAL_ACTIONS.input) {
       if (isSlackConfigured() && payload.trigger_id) {
         await slack().views.open({ trigger_id: payload.trigger_id, view: inputModalView(token) });
@@ -65,10 +71,48 @@ export async function POST(req: Request) {
       return new Response(null, { status: 200 });
     }
 
-    await resume(token, {
-      approved: action?.action_id === APPROVAL_ACTIONS.approve,
+    // Escalate → re-post the SAME approval to the next tier and retire this message. The durable
+    // run is untouched: it stays suspended on the same token — we only change who we're asking.
+    if (action?.action_id === APPROVAL_ACTIONS.escalate && routing) {
+      const channel = payload.container?.channel_id;
+      const toLabel = routing.tiers[routing.tierIndex] ?? "next tier";
+      if (isSlackConfigured() && channel) {
+        await slack().chat.postMessage({
+          channel,
+          text: `Approval escalated to ${toLabel}`,
+          blocks: approvalBlocks(details, token, { routing, detailsUrl }),
+        });
+        if (payload.container?.message_ts) {
+          await slack().chat.update({
+            channel,
+            ts: payload.container.message_ts,
+            text: `Escalated to ${toLabel}`,
+            blocks: escalatedBlocks(details, toLabel),
+          });
+        }
+      }
+      return new Response(null, { status: 200 });
+    }
+
+    // Approve / Deny → resume the durable hook, tagged with the deciding tier + escalation path.
+    const approved = action?.action_id === APPROVAL_ACTIONS.approve;
+    const decision: ApprovalDecision = {
+      approved,
       by: userName(payload.user),
-    });
+      tier: routing?.tiers[routing.tierIndex],
+      escalatedFrom: routing && routing.from.length ? routing.from : undefined,
+    };
+    await resume(token, decision);
+
+    // Reflect the verdict on the message that was clicked (the workflow also updates its own copy).
+    if (isSlackConfigured() && payload.container?.channel_id && payload.container?.message_ts) {
+      await slack().chat.update({
+        channel: payload.container.channel_id,
+        ts: payload.container.message_ts,
+        text: approved ? "Approved" : "Denied",
+        blocks: resolvedBlocks(details, decision),
+      });
+    }
     return new Response(null, { status: 200 });
   }
 

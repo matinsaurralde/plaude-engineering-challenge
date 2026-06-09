@@ -37,7 +37,10 @@ export type CaseSummary = {
   status: CaseStatus;
   account?: { id: string; holder: string; balanceUsd: number; riskLevel: string };
   operation?: { kind: string; amountUsd?: number; ref?: string };
-  approval?: { required: boolean; decision?: { approved: boolean; by?: string; note?: string } };
+  approval?: {
+    required: boolean;
+    decision?: { approved: boolean; by?: string; note?: string; tier?: string; escalatedFrom?: string[] };
+  };
   steps: number;
   toolCalls: number;
 };
@@ -48,6 +51,8 @@ const rec = (v: unknown): Record<string, unknown> =>
 const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
 const num = (v: unknown): number | undefined => (typeof v === "number" ? v : undefined);
 const bool = (v: unknown): boolean | undefined => (typeof v === "boolean" ? v : undefined);
+const strArr = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 
 type LooseTool = {
   name: string;
@@ -184,11 +189,20 @@ export function buildTimeline(messages: UIMessage[]): TraceEvent[] {
         if (t.state === "output-available") {
           const by = str(t.output.by);
           const note = str(t.output.note);
+          const tier = str(t.output.tier);
+          const esc = strArr(t.output.escalatedFrom);
           events.push({
             key: `${m.id}:${i}:approval-res`,
             kind: "approval-resolved",
             title: approved ? "Approved" : "Denied",
-            detail: [by ? `by ${by}` : "", note ? `“${note}”` : ""].filter(Boolean).join(" — "),
+            detail: [
+              by ? `by ${by}` : "",
+              tier ? `tier ${tier}` : "",
+              esc.length ? `escalated from ${esc.join(" → ")}` : "",
+              note ? `“${note}”` : "",
+            ]
+              .filter(Boolean)
+              .join(" — "),
             status: approved ? "ok" : "denied",
             output: t.output,
           });
@@ -250,12 +264,15 @@ export function deriveSummary(messages: UIMessage[]): CaseSummary {
           operation = { kind: "approval", ref: str(t.input.action) };
         }
         if (t.state === "output-available") {
+          const escalatedFrom = strArr(t.output.escalatedFrom);
           approval = {
             required: true,
             decision: {
               approved: bool(t.output.approved) ?? false,
               by: str(t.output.by),
               note: str(t.output.note),
+              tier: str(t.output.tier),
+              escalatedFrom: escalatedFrom.length ? escalatedFrom : undefined,
             },
           };
         } else {

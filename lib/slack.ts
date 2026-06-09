@@ -7,10 +7,57 @@ export type ApprovalDetails = {
   riskLevel?: string;
 };
 
+/** Approver escalation ladder, low → high. Fallback when the policy supplies none. */
+export const DEFAULT_TIERS = ["Support", "Finance", "Compliance"] as const;
+
+/** Where an approval currently sits in the escalation ladder. Travels inside the Slack button value. */
+export type ApprovalRouting = {
+  tiers: string[]; // ordered ladder, low → high
+  tierIndex: number; // current tier (0-based)
+  from: string[]; // tier labels it was escalated through to reach here
+};
+
+type BtnPayload = { t: string; x: string[]; i: number; f: string[]; s?: string; a?: string; r?: string; u?: string };
+
+function encodeBtn(p: BtnPayload): string {
+  // Slack action `value` is capped at 2000 chars — clip the free-text fields defensively.
+  return JSON.stringify({ ...p, s: p.s?.slice(0, 220), a: p.a?.slice(0, 160) });
+}
+
+/** Decode a Slack action `value`. Tolerates a bare token (older / simple buttons). */
+export function decodeApproval(value?: string): {
+  token?: string;
+  routing?: ApprovalRouting;
+  details: ApprovalDetails;
+  detailsUrl?: string;
+} {
+  if (value) {
+    try {
+      const o = JSON.parse(value) as Partial<BtnPayload>;
+      if (o && typeof o.t === "string") {
+        return {
+          token: o.t,
+          routing: {
+            tiers: Array.isArray(o.x) ? o.x : [],
+            tierIndex: typeof o.i === "number" ? o.i : 0,
+            from: Array.isArray(o.f) ? o.f : [],
+          },
+          details: { summary: o.s, action: o.a, riskLevel: o.r },
+          detailsUrl: typeof o.u === "string" ? o.u : undefined,
+        };
+      }
+    } catch {
+      // not JSON — treat as a bare token
+    }
+  }
+  return { token: value, details: {} };
+}
+
 export const APPROVAL_ACTIONS = {
   approve: "approval_approve",
   deny: "approval_deny",
   input: "approval_input",
+  escalate: "approval_escalate", // re-route the same approval up a tier (from Slack)
   details: "approval_details", // URL button — opens the Engineering view, no decision
 } as const;
 
@@ -50,48 +97,70 @@ export function verifySlackSignature(rawBody: string, timestamp: string, signatu
 
 const RISK_EMOJI: Record<string, string> = { high: "🔴", medium: "🟠", low: "🟢" };
 
-export function approvalBlocks(d: ApprovalDetails, token: string, detailsUrl?: string): KnownBlock[] {
+export function approvalBlocks(
+  d: ApprovalDetails,
+  token: string,
+  opts: { detailsUrl?: string; routing?: ApprovalRouting } = {},
+): KnownBlock[] {
   const risk = d.riskLevel ?? "medium";
+  const routing = opts.routing;
+  const cur = Math.min(routing?.tierIndex ?? 0, Math.max((routing?.tiers.length ?? 1) - 1, 0));
+  const tierLabel = routing && routing.tiers.length ? routing.tiers[cur] : undefined;
+  const canEscalate = !!routing && cur < routing.tiers.length - 1;
+
+  const base: BtnPayload = {
+    t: token,
+    x: routing?.tiers ?? [],
+    i: cur,
+    f: routing?.from ?? [],
+    s: d.summary,
+    a: d.action,
+    r: d.riskLevel,
+    u: opts.detailsUrl,
+  };
+  const value = routing ? encodeBtn(base) : token;
+  const escalateValue =
+    canEscalate && routing && tierLabel
+      ? encodeBtn({ ...base, i: cur + 1, f: [...routing.from, tierLabel] })
+      : undefined;
+
+  const context: { type: "mrkdwn"; text: string }[] = [
+    { type: "mrkdwn", text: `${RISK_EMOJI[risk] ?? "⚪"} Risk: *${risk}*` },
+  ];
+  if (tierLabel) context.push({ type: "mrkdwn", text: `👤 Approver: *Tier ${cur + 1} · ${tierLabel}*` });
+  if (routing && routing.from.length)
+    context.push({ type: "mrkdwn", text: `⤴ Escalated from ${routing.from.join(" → ")}` });
+
   return [
     { type: "header", text: { type: "plain_text", text: "🔒 Approval required", emoji: true } },
     { type: "section", text: { type: "mrkdwn", text: `*${d.summary ?? d.action ?? "Action needs sign-off"}*` } },
     ...(d.action
       ? [{ type: "section" as const, text: { type: "mrkdwn" as const, text: `Action: ${d.action}` } }]
       : []),
-    {
-      type: "context",
-      elements: [{ type: "mrkdwn", text: `${RISK_EMOJI[risk] ?? "⚪"} Risk: *${risk}*` }],
-    },
+    { type: "context", elements: context },
     {
       type: "actions",
       elements: [
-        {
-          type: "button",
-          action_id: APPROVAL_ACTIONS.approve,
-          style: "primary",
-          text: { type: "plain_text", text: "Approve" },
-          value: token,
-        },
-        {
-          type: "button",
-          action_id: APPROVAL_ACTIONS.deny,
-          style: "danger",
-          text: { type: "plain_text", text: "Deny" },
-          value: token,
-        },
-        {
-          type: "button",
-          action_id: APPROVAL_ACTIONS.input,
-          text: { type: "plain_text", text: "Provide input" },
-          value: token,
-        },
-        ...(detailsUrl
+        { type: "button", action_id: APPROVAL_ACTIONS.approve, style: "primary", text: { type: "plain_text", text: "Approve" }, value },
+        { type: "button", action_id: APPROVAL_ACTIONS.deny, style: "danger", text: { type: "plain_text", text: "Deny" }, value },
+        { type: "button", action_id: APPROVAL_ACTIONS.input, text: { type: "plain_text", text: "Provide input" }, value },
+        ...(escalateValue
+          ? [
+              {
+                type: "button" as const,
+                action_id: APPROVAL_ACTIONS.escalate,
+                text: { type: "plain_text" as const, text: `Escalate ⤴ ${routing!.tiers[cur + 1]}` },
+                value: escalateValue,
+              },
+            ]
+          : []),
+        ...(opts.detailsUrl
           ? [
               {
                 type: "button" as const,
                 action_id: APPROVAL_ACTIONS.details,
                 text: { type: "plain_text" as const, text: "View case details" },
-                url: detailsUrl,
+                url: opts.detailsUrl,
               },
             ]
           : []),
@@ -102,14 +171,24 @@ export function approvalBlocks(d: ApprovalDetails, token: string, detailsUrl?: s
 
 export function resolvedBlocks(
   d: ApprovalDetails,
-  decision: { approved: boolean; by?: string; note?: string },
+  decision: { approved: boolean; by?: string; note?: string; tier?: string; escalatedFrom?: string[] },
 ): KnownBlock[] {
   const verdict = decision.approved ? "✅ Approved" : "❌ Denied";
   const by = decision.by ? ` by *${decision.by}*` : "";
+  const tier = decision.tier ? ` · Tier: *${decision.tier}*` : "";
+  const esc = decision.escalatedFrom?.length ? `\n⤴ Escalated from ${decision.escalatedFrom.join(" → ")}` : "";
   const note = decision.note ? `\n> ${decision.note}` : "";
   return [
     { type: "section", text: { type: "mrkdwn", text: `*${d.summary ?? d.action ?? "Approval"}*` } },
-    { type: "context", elements: [{ type: "mrkdwn", text: `${verdict}${by}${note}` }] },
+    { type: "context", elements: [{ type: "mrkdwn", text: `${verdict}${by}${tier}${esc}${note}` }] },
+  ];
+}
+
+/** The original message becomes a non-actionable note once it's been escalated up a tier. */
+export function escalatedBlocks(d: ApprovalDetails, toLabel: string): KnownBlock[] {
+  return [
+    { type: "section", text: { type: "mrkdwn", text: `*${d.summary ?? d.action ?? "Approval"}*` } },
+    { type: "context", elements: [{ type: "mrkdwn", text: `⤴ Escalated to *${toLabel}* — awaiting their decision` }] },
   ];
 }
 

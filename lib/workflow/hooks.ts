@@ -9,6 +9,8 @@ export const approvalDecisionSchema = z.object({
   approved: z.boolean(),
   by: z.string().optional(), // who decided — "in-app", a Slack user, or "system" on timeout
   note: z.string().optional(), // optional comment / free-text input from the human
+  tier: z.string().optional(), // the approver tier that made the decision
+  escalatedFrom: z.array(z.string()).optional(), // tiers it was escalated through to reach the decider
 });
 
 export type ApprovalDecision = z.infer<typeof approvalDecisionSchema>;
