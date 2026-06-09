@@ -3,6 +3,8 @@
 import { useChat } from "@ai-sdk/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { UIMessage } from "ai";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { DEFAULT_INSTRUCTIONS } from "@/lib/agent/instructions";
 import {
   buildExport,
@@ -364,7 +366,22 @@ function ChatMessage({ message }: { message: UIMessage }) {
           ))}
         </div>
       )}
-      {text && <Bubble role={message.role}>{text}</Bubble>}
+      {text &&
+        (message.role === "user" ? (
+          <Bubble role="user">{text}</Bubble>
+        ) : (
+          <div className="max-w-[85%] self-start rounded-2xl rounded-bl-sm border border-zinc-800 bg-zinc-900 px-4 py-2.5 text-sm text-zinc-100">
+            <Markdown>{text}</Markdown>
+          </div>
+        ))}
+    </div>
+  );
+}
+
+function Markdown({ children }: { children: string }) {
+  return (
+    <div className="leading-relaxed [&_a]:underline [&_li]:my-0.5 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-1 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 [&_strong]:font-semibold [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{children}</ReactMarkdown>
     </div>
   );
 }
