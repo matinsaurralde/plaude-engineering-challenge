@@ -306,6 +306,16 @@ export default function Home() {
     setTab("chat");
   }
 
+  function deleteCase(id: string) {
+    setCases((prev) => {
+      const next = prev.filter((c) => c.id !== id);
+      saveCases(next);
+      return next;
+    });
+    // If we deleted the case we were looking at, drop back to a clean new case.
+    if (id === activeId) newCase();
+  }
+
   async function resolveApproval(token: string, approved: boolean, note: string, closed = false) {
     setApproving(true);
     try {
@@ -326,7 +336,7 @@ export default function Home() {
 
   return (
     <div className="flex h-dvh bg-zinc-950 text-zinc-100">
-      <Sidebar cases={cases} activeId={activeId} onSelect={selectCase} onNew={newCase} />
+      <Sidebar cases={cases} activeId={activeId} onSelect={selectCase} onNew={newCase} onDelete={deleteCase} />
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex items-center gap-3 border-b border-zinc-800/80 px-5 py-3">
@@ -432,11 +442,13 @@ function Sidebar({
   activeId,
   onSelect,
   onNew,
+  onDelete,
 }: {
   cases: StoredCase[];
   activeId: string;
   onSelect: (id: string) => void;
   onNew: () => void;
+  onDelete: (id: string) => void;
 }) {
   return (
     <aside className="flex w-60 shrink-0 flex-col border-r border-zinc-800/80 bg-zinc-900/40">
@@ -456,19 +468,31 @@ function Sidebar({
           cases.map((c) => {
             const meta = STATUS_META[deriveSummary(c.messages).status];
             return (
-              <button
+              <div
                 key={c.id}
-                onClick={() => onSelect(c.id)}
-                className={`mb-1 flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition ${
+                className={`group relative mb-1 rounded-lg transition ${
                   c.id === activeId ? "bg-zinc-800" : "hover:bg-zinc-800/50"
                 }`}
               >
-                <span className={`mt-1.5 size-1.5 shrink-0 rounded-full ${meta.dot}`} />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm text-zinc-200">{c.title}</span>
-                  <span className={`text-[11px] ${meta.text}`}>{meta.label}</span>
-                </span>
-              </button>
+                <button
+                  onClick={() => onSelect(c.id)}
+                  className="flex w-full items-start gap-2 rounded-lg px-2.5 py-2 pr-8 text-left"
+                >
+                  <span className={`mt-1.5 size-1.5 shrink-0 rounded-full ${meta.dot}`} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm text-zinc-200">{c.title}</span>
+                    <span className={`text-[11px] ${meta.text}`}>{meta.label}</span>
+                  </span>
+                </button>
+                <button
+                  onClick={() => onDelete(c.id)}
+                  aria-label="Delete case"
+                  title="Delete case"
+                  className="absolute right-1.5 top-1.5 hidden size-6 place-items-center rounded-md text-zinc-500 transition hover:bg-zinc-700 hover:text-zinc-200 group-hover:grid"
+                >
+                  ✕
+                </button>
+              </div>
             );
           })
         )}
