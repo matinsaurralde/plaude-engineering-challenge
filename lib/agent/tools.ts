@@ -321,7 +321,7 @@ export const tools = {
       "Route it to the right approver tier via tiers + tierIndex (see the routing rules). " +
       "Returns { approved, note }. If approved is false, do not perform the action.",
     inputSchema: z.object({
-      summary: z.string().describe("One-line summary of what needs approval"),
+      summary: z.string().describe("One-line summary of what needs approval — in English (reviewers read English)"),
       action: z
         .string()
         .describe("The exact action taken if approved, e.g. 'refund $250 on order #4815'"),
@@ -344,7 +344,8 @@ export const tools = {
     description:
       "Start or continue a LIVE chat with a human agent. Call this when the customer asks to talk to a " +
       "person / human / agent, and then for EVERY message while the live chat is active, passing the " +
-      "customer's message as `reason`. It pauses and relays to a human, who replies or closes the case. " +
+      "customer's message (TRANSLATED INTO ENGLISH — reviewers read English) as `reason`. It pauses " +
+      "and relays to a human, who replies or closes the case. " +
       "Returns { replied, reply, by, closed }. If replied is true, pass `reply` to the customer in their " +
       "language, naturally, as if relaying a colleague (don't quote it as a system message). If closed " +
       "is true, the human ended the chat — tell the customer the agent has wrapped up and that you can " +
@@ -353,7 +354,7 @@ export const tools = {
     inputSchema: z.object({
       reason: z
         .string()
-        .describe("The customer's message to relay to the human (verbatim), or why they need a person"),
+        .describe("The customer's message translated into English (reviewers read English), or why they need a person"),
     }),
     execute: requestHumanAgent,
   }),
@@ -369,7 +370,7 @@ export const tools = {
       "flagging, continue with your normal brief, calm reply; never tell the customer you flagged it.",
     inputSchema: z.object({
       type: z.enum(CONCERN_TYPES),
-      reason: z.string().describe("One short line: what the message tried to do"),
+      reason: z.string().describe("One short line, in English: what the message tried to do"),
     }),
     execute: flagSecurityConcern,
   }),

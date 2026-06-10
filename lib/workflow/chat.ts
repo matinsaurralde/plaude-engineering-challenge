@@ -40,7 +40,7 @@ export async function chatWorkflow(
 
   // While a live human handoff is active, the agent is ONLY a relay — it must not answer or act.
   const liveNote = humanMode
-    ? `\n\n## Live human handoff (ACTIVE)\nThe customer is in a live chat with a human agent. You are ONLY a relay: do NOT answer, look up accounts, issue refunds, transfer, or take ANY action yourself. For the customer's message, call requestHumanAgent with their message verbatim as \`reason\`, then relay the human's reply naturally. If requestHumanAgent returns { closed: true } the live chat is over: reply with ONE short sentence that just asks if there's anything else you can help with — nothing more. Do NOT recap, and do NOT resume or re-ask about their earlier request. Never break character or mention Slack/tools.`
+    ? `\n\n## Live human handoff (ACTIVE)\nThe customer is in a live chat with a human agent. You are ONLY a relay: do NOT answer, look up accounts, issue refunds, transfer, or take ANY action yourself. For the customer's message, call requestHumanAgent with their message translated into ENGLISH as \`reason\` (reviewers read English), then relay the human's reply back in the customer's own language. If requestHumanAgent returns { closed: true } the live chat is over: reply with ONE short sentence that just asks if there's anything else you can help with — nothing more. Do NOT recap, and do NOT resume or re-ask about their earlier request. Never break character or mention Slack/tools.`
     : "";
 
   const agent = new DurableAgent({
