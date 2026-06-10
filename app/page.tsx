@@ -1,6 +1,7 @@
 "use client";
 
 import { useChat } from "@ai-sdk/react";
+import { WorkflowChatTransport } from "@workflow/ai";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { UIMessage } from "ai";
 import ReactMarkdown from "react-markdown";
@@ -10,6 +11,7 @@ import {
   buildExport,
   buildTimeline,
   deriveSummary,
+  liveHandoff,
   money,
   type CaseStatus,
   type TraceEvent,
@@ -82,13 +84,49 @@ const STATUS_META: Record<CaseStatus, { label: string; text: string; dot: string
   "pending-approval": { label: "Awaiting approval", text: "text-amber-400", dot: "bg-amber-400" },
   approved: { label: "Approved", text: "text-emerald-400", dot: "bg-emerald-400" },
   denied: { label: "Denied", text: "text-rose-400", dot: "bg-rose-400" },
+  closed: { label: "Closed", text: "text-violet-300", dot: "bg-violet-400" },
   handled: { label: "Handled", text: "text-zinc-400", dot: "bg-zinc-500" },
   active: { label: "Active", text: "text-sky-400", dot: "bg-sky-400" },
   idle: { label: "New", text: "text-zinc-500", dot: "bg-zinc-600" },
 };
 
+// localStorage key for the in-flight durable run id. The chat workflow can pause for minutes on a
+// Slack approval; if the stream drops (a function timeout, a refresh, a dev-server restart) we use
+// this to reconnect to the very same durable run instead of stranding it. See app/api/chat/[id].
+const RUN_ID_KEY = "matute.run.v1";
+
 export default function Home() {
-  const { messages, sendMessage, status, setMessages } = useChat();
+  // Resume an in-flight run on mount (e.g. the tab was reopened while paused on an approval).
+  const activeRunId = useMemo(() => {
+    if (typeof window === "undefined") return undefined;
+    return window.localStorage.getItem(RUN_ID_KEY) ?? undefined;
+  }, []);
+
+  // Drop-in transport that auto-reconnects to interrupted streams (network drops, refreshes, Vercel
+  // function timeouts). This is the piece that makes "pause for a human in Slack, then resume"
+  // actually reach the browser even when the wait outlives a single HTTP request — without it the
+  // durable run keeps going server-side but its result never gets delivered to the UI.
+  const transport = useMemo(
+    () =>
+      new WorkflowChatTransport<UIMessage>({
+        onChatSendMessage: (response) => {
+          const id = response.headers.get("x-workflow-run-id");
+          if (id) window.localStorage.setItem(RUN_ID_KEY, id);
+        },
+        onChatEnd: () => window.localStorage.removeItem(RUN_ID_KEY),
+        prepareReconnectToStreamRequest: (config) => {
+          const id = window.localStorage.getItem(RUN_ID_KEY);
+          if (!id) throw new Error("No active workflow run to reconnect to");
+          return { ...config, api: `/api/chat/${encodeURIComponent(id)}/stream` };
+        },
+      }),
+    [],
+  );
+
+  const { messages, sendMessage, status, setMessages } = useChat({
+    resume: Boolean(activeRunId),
+    transport,
+  });
   const [tab, setTab] = useState<Tab>("chat");
   const [input, setInput] = useState("");
   const [authAccount, setAuthAccount] = useState("9000");
@@ -136,7 +174,7 @@ export default function Home() {
     // Persist when a turn settles, or when it's paused on an approval (so the Slack deep link
     // can find the case while it's awaiting review).
     const hasPending = buildTimeline(messages).some(
-      (e) => e.kind === "approval-request" && e.approvalToken,
+      (e) => (e.kind === "approval-request" || e.kind === "human-agent") && e.approvalToken,
     );
     if (busy && !hasPending) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- persisting a settled or paused conversation
@@ -183,7 +221,12 @@ export default function Home() {
 
   const timeline = useMemo(() => buildTimeline(messages), [messages]);
   const summary = useMemo(() => deriveSummary(messages), [messages]);
-  const pending = timeline.find((e) => e.kind === "approval-request" && e.approvalToken);
+  // A live human handoff stays active (and in one Slack thread) until a human closes it. We pass
+  // this back each turn so the agent keeps relaying instead of answering.
+  const live = useMemo(() => liveHandoff(messages), [messages]);
+  const pending = timeline.find(
+    (e) => (e.kind === "approval-request" || e.kind === "human-agent") && e.approvalToken,
+  );
   const account = DEMO_ACCOUNTS.find((a) => a.id === authAccount) ?? DEMO_ACCOUNTS[0];
   const identity = ACCOUNT_DIRECTORY[authAccount];
   const quarantined = quarantinedFromFlags(summary.securityFlags);
@@ -210,7 +253,16 @@ export default function Home() {
     if (!trimmed || busy) return;
     sendMessage(
       { text: trimmed },
-      { body: { instructions, caseId: activeId, authenticatedAccountId: authAccount, quarantined } },
+      {
+        body: {
+          instructions,
+          caseId: activeId,
+          authenticatedAccountId: authAccount,
+          quarantined,
+          humanMode: live.active,
+          humanThreadTs: live.threadTs,
+        },
+      },
     );
     setInput("");
     setTab("chat");
@@ -250,13 +302,13 @@ export default function Home() {
     setTab("chat");
   }
 
-  async function resolveApproval(token: string, approved: boolean, note: string) {
+  async function resolveApproval(token: string, approved: boolean, note: string, closed = false) {
     setApproving(true);
     try {
       await fetch("/api/approve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, approved, note: note.trim() || undefined }),
+        body: JSON.stringify({ token, approved, note: note.trim() || undefined, closed: closed || undefined }),
       });
     } finally {
       setApproving(false);
@@ -323,7 +375,7 @@ export default function Home() {
             <ChatTab
               messages={messages}
               busy={busy}
-              pending={!!pending}
+              pending={pending}
               examples={account.examples}
               identity={identity}
               accountId={authAccount}
@@ -435,7 +487,7 @@ function ChatTab({
 }: {
   messages: UIMessage[];
   busy: boolean;
-  pending: boolean;
+  pending: TraceEvent | undefined;
   examples: string[];
   identity?: DirectoryEntry;
   accountId: string;
@@ -496,8 +548,12 @@ function ChatTab({
 
         {pending && (
           <div className="flex items-center gap-2 self-start rounded-2xl rounded-bl-sm border border-zinc-800 bg-zinc-900 px-4 py-2.5 text-sm text-zinc-400">
-            <span className="size-1.5 animate-pulse rounded-full bg-amber-400" />
-            Reviewing your request…
+            <span
+              className={`size-1.5 animate-pulse rounded-full ${pending.kind === "human-agent" ? "bg-violet-400" : "bg-amber-400"}`}
+            />
+            {pending.kind === "human-agent"
+              ? "Connecting you with a person… we'll bring their reply here."
+              : "Awaiting human confirmation — we'll update you here as soon as it's reviewed."}
           </div>
         )}
 
@@ -533,7 +589,11 @@ function ChatMessage({ message }: { message: UIMessage }) {
               key={i}
               className="rounded-md border border-zinc-800 bg-zinc-900 px-2 py-0.5 font-mono text-[11px] text-zinc-400"
             >
-              {name === "requestHumanApproval" ? "⏸ requestHumanApproval" : `⚙ ${name}`}
+              {name === "requestHumanApproval"
+                ? "⏸ requestHumanApproval"
+                : name === "requestHumanAgent"
+                  ? "🙋 requestHumanAgent"
+                  : `⚙ ${name}`}
             </span>
           ))}
         </div>
@@ -565,18 +625,25 @@ function ApprovalCard({
 }: {
   event: TraceEvent;
   approving: boolean;
-  onResolve: (token: string, approved: boolean, note: string) => void;
+  onResolve: (token: string, approved: boolean, note: string, closed?: boolean) => void;
 }) {
   const [note, setNote] = useState("");
+  const isHandoff = event.kind === "human-agent";
   const risk = event.approval?.riskLevel ?? "medium";
   const riskColor =
     risk === "high" ? "text-rose-400" : risk === "medium" ? "text-amber-400" : "text-emerald-400";
 
   return (
-    <div className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-4">
+    <div
+      className={`rounded-xl border p-4 ${isHandoff ? "border-violet-500/40 bg-violet-500/5" : "border-amber-500/40 bg-amber-500/5"}`}
+    >
       <div className="flex items-center gap-2">
-        <span className="text-sm font-semibold text-amber-300">⏸ Human approval required</span>
-        <span className={`ml-auto font-mono text-[11px] uppercase ${riskColor}`}>{risk} risk</span>
+        <span className={`text-sm font-semibold ${isHandoff ? "text-violet-300" : "text-amber-300"}`}>
+          {isHandoff ? "🙋 Customer wants a human" : "⏸ Human approval required"}
+        </span>
+        {!isHandoff && (
+          <span className={`ml-auto font-mono text-[11px] uppercase ${riskColor}`}>{risk} risk</span>
+        )}
       </div>
       <p className="mt-2 text-sm text-zinc-200">{event.approval?.action ?? event.detail}</p>
       {event.why && <p className="mt-1 text-xs text-zinc-500">{event.why}</p>}
@@ -584,23 +651,23 @@ function ApprovalCard({
       <input
         value={note}
         onChange={(e) => setNote(e.target.value)}
-        placeholder="Optional note / input for the agent…"
+        placeholder={isHandoff ? "Type the reply to send to the customer…" : "Optional note / input for the agent…"}
         className="mt-3 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm outline-none placeholder:text-zinc-600 focus:border-zinc-600"
       />
       <div className="mt-3 flex gap-2">
         <button
-          disabled={approving}
+          disabled={approving || (isHandoff && !note.trim())}
           onClick={() => onResolve(event.approvalToken!, true, note)}
-          className="rounded-lg bg-emerald-500 px-3.5 py-1.5 text-sm font-medium text-zinc-950 transition enabled:hover:bg-emerald-400 disabled:opacity-50"
+          className={`rounded-lg px-3.5 py-1.5 text-sm font-medium text-zinc-950 transition disabled:opacity-50 ${isHandoff ? "bg-violet-400 enabled:hover:bg-violet-300" : "bg-emerald-500 enabled:hover:bg-emerald-400"}`}
         >
-          Approve
+          {isHandoff ? "Send reply" : "Approve"}
         </button>
         <button
           disabled={approving}
-          onClick={() => onResolve(event.approvalToken!, false, note)}
+          onClick={() => onResolve(event.approvalToken!, false, isHandoff ? "" : note, isHandoff)}
           className="rounded-lg border border-zinc-700 px-3.5 py-1.5 text-sm text-zinc-300 transition enabled:hover:border-rose-500/60 enabled:hover:text-rose-300 disabled:opacity-50"
         >
-          Deny
+          {isHandoff ? "Close case" : "Deny"}
         </button>
         <span className="ml-auto self-center font-mono text-[10px] text-zinc-600">
           token {event.approvalToken?.slice(0, 10)}…
@@ -889,7 +956,7 @@ function EngineeringTab({
   pending: TraceEvent | undefined;
   approving: boolean;
   onBack: () => void;
-  onResolve: (token: string, approved: boolean, note: string) => void;
+  onResolve: (token: string, approved: boolean, note: string, closed?: boolean) => void;
   onExport: () => object;
 }) {
   const [copied, setCopied] = useState(false);
@@ -1054,6 +1121,7 @@ const EVENT_DOT: Record<TraceEvent["kind"], string> = {
   tool: "bg-teal-400",
   "approval-request": "bg-amber-400",
   "approval-resolved": "bg-emerald-400",
+  "human-agent": "bg-violet-400",
   security: "bg-rose-500",
 };
 

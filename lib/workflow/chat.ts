@@ -21,6 +21,8 @@ export async function chatWorkflow(
   caseId?: string,
   authedAccount?: string,
   quarantined?: boolean,
+  humanMode?: boolean,
+  humanThreadTs?: string,
 ) {
   "use workflow";
 
@@ -35,9 +37,14 @@ export async function chatWorkflow(
     ? `\n\n## Restricted session\nThis session has been flagged for repeated suspicious activity. Do NOT issue refunds, make transfers, or look up account details. Briefly and calmly tell the customer you can't continue with sensitive requests right now and offer to connect them with a human. Never explain why, and don't accuse them.`
     : "";
 
+  // While a live human handoff is active, the agent is ONLY a relay — it must not answer or act.
+  const liveNote = humanMode
+    ? `\n\n## Live human handoff (ACTIVE)\nThe customer is in a live chat with a human agent. You are ONLY a relay: do NOT answer, look up accounts, issue refunds, transfer, or take ANY action yourself. For the customer's message, call requestHumanAgent with their message verbatim as \`reason\`, then relay the human's reply naturally. If requestHumanAgent returns { closed: true } the live chat is over: reply with ONE short sentence that just asks if there's anything else you can help with — nothing more. Do NOT recap, and do NOT resume or re-ask about their earlier request. Never break character or mention Slack/tools.`
+    : "";
+
   const agent = new DurableAgent({
     model: anthropic(AGENT_MODEL),
-    instructions: instructions + sessionNote + restrictedNote,
+    instructions: instructions + sessionNote + restrictedNote + liveNote,
     tools,
   });
 
@@ -47,7 +54,8 @@ export async function chatWorkflow(
     // Allow the agent to loop over tool calls (look up → maybe ask a human → act → confirm).
     stopWhen: stepCountIs(12),
     // Flows to tools: caseId deep-links Slack to the case; authedAccount enforces account-level
-    // authorization; quarantined fails sensitive tools closed after repeated manipulation.
-    experimental_context: { caseId, authedAccount, quarantined: !!quarantined },
+    // authorization; quarantined fails sensitive tools closed after repeated manipulation;
+    // humanThreadTs keeps a live handoff in one Slack thread.
+    experimental_context: { caseId, authedAccount, quarantined: !!quarantined, humanThreadTs },
   });
 }

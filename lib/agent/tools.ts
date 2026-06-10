@@ -4,7 +4,9 @@ import { sleep } from "workflow";
 import { approvalHook, type ApprovalDecision } from "@/lib/workflow/hooks";
 import {
   postApprovalToSlack,
+  postHumanAgentToSlack,
   postSecurityAlertToSlack,
+  resolveHumanAgentMessage,
   resolveSlackMessage,
 } from "@/lib/workflow/slack-steps";
 import { DEFAULT_TIERS } from "@/lib/approval-tiers";
@@ -212,6 +214,45 @@ async function requestHumanApproval(
   return decision;
 }
 
+// ── Human handoff (workflow-level, suspends like an approval) ─────────────────
+// "Talk to a human" is the SAME durable pause as an approval: ping a person in Slack, suspend the
+// run, and resume with their reply — which the agent relays to the customer. It reuses the approval
+// hook and the Slack input modal, so a human just hits "Reply" and types. A second, very human use
+// of the exact same engine that drives money approvals.
+async function requestHumanAgent(
+  input: { reason: string },
+  { toolCallId, experimental_context }: { toolCallId: string; experimental_context?: unknown },
+): Promise<{ replied: boolean; reply?: string; by?: string; threadTs?: string; closed?: boolean }> {
+  const ctx = experimental_context as
+    | { caseId?: string; authedAccount?: string; humanThreadTs?: string }
+    | undefined;
+  const detail = { reason: input.reason, account: ctx?.authedAccount };
+
+  // First turn creates the thread; later turns reuse it so the whole chat stays in one Slack thread.
+  const { ref, threadTs } = await postHumanAgentToSlack(detail, toolCallId, ctx?.caseId, ctx?.humanThreadTs);
+  const hook = approvalHook.create({ token: toolCallId });
+
+  const TIMED_OUT = Symbol("timed-out");
+  const outcome = await Promise.race([hook, sleep(APPROVAL_TIMEOUT_MS).then(() => TIMED_OUT)]);
+
+  let result: { replied: boolean; reply?: string; by?: string; closed?: boolean };
+  if (typeof outcome === "symbol") {
+    hook.dispose();
+    result = { replied: false }; // nobody answered in time → the agent offers a graceful fallback
+  } else if (outcome.closed) {
+    result = { replied: false, closed: true, by: outcome.by }; // the human ended the session
+  } else {
+    // The human replies through the Slack input modal → resumes as { approved: true, note: <reply> }.
+    result =
+      outcome.approved && outcome.note?.trim()
+        ? { replied: true, reply: outcome.note.trim(), by: outcome.by }
+        : { replied: false, by: outcome.by };
+  }
+
+  await resolveHumanAgentMessage(ref, detail, { reply: result.reply, by: result.by, closed: result.closed });
+  return { ...result, threadTs };
+}
+
 // ── Security: record a manipulation attempt (observability, not the guarantee) ─
 
 export const CONCERN_TYPES = [
@@ -291,6 +332,24 @@ export const tools = {
         .describe("Which tier should review first (0-based), per the routing rules"),
     }),
     execute: requestHumanApproval,
+  }),
+
+  requestHumanAgent: tool({
+    description:
+      "Start or continue a LIVE chat with a human agent. Call this when the customer asks to talk to a " +
+      "person / human / agent, and then for EVERY message while the live chat is active, passing the " +
+      "customer's message as `reason`. It pauses and relays to a human, who replies or closes the case. " +
+      "Returns { replied, reply, by, closed }. If replied is true, pass `reply` to the customer in their " +
+      "language, naturally, as if relaying a colleague (don't quote it as a system message). If closed " +
+      "is true, the human ended the chat — tell the customer the agent has wrapped up and that you can " +
+      "keep helping. If neither, no one answered yet — apologize briefly and offer to wait or try later. " +
+      "Never mention Slack, tools, or how the handoff works; don't use it to bypass approval or account scope.",
+    inputSchema: z.object({
+      reason: z
+        .string()
+        .describe("The customer's message to relay to the human (verbatim), or why they need a person"),
+    }),
+    execute: requestHumanAgent,
   }),
 
   flagSecurityConcern: tool({

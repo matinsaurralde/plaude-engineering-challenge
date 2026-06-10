@@ -1,5 +1,7 @@
 import {
   approvalBlocks,
+  humanAgentBlocks,
+  humanAgentResolvedBlocks,
   isSlackConfigured,
   resolvedBlocks,
   securityAlertBlocks,
@@ -62,6 +64,55 @@ export async function postSecurityAlertToSlack(
     });
   } catch (err) {
     console.error("[slack] security alert failed:", err instanceof Error ? err.message : err);
+  }
+}
+
+/**
+ * Post a live-handoff turn to Slack. The first turn (no threadTs) creates the root message and its
+ * ts becomes the thread; later turns post as replies in that same thread. Returns the message ref
+ * plus the thread root ts so the caller can keep threading. Same once-only step discipline.
+ */
+export async function postHumanAgentToSlack(
+  detail: { reason?: string; account?: string },
+  token: string,
+  caseId?: string,
+  threadTs?: string,
+): Promise<{ ref: SlackRef | null; threadTs?: string }> {
+  "use step";
+  if (!isSlackConfigured()) return { ref: null, threadTs };
+  const channel = process.env.SLACK_APPROVAL_CHANNEL_ID as string;
+  try {
+    const res = await slack().chat.postMessage({
+      channel,
+      thread_ts: threadTs,
+      text: `Customer: ${detail.reason ?? "message"}`,
+      blocks: humanAgentBlocks(detail, token, { detailsUrl: engineeringUrl(caseId), root: !threadTs }),
+    });
+    const ts = typeof res.ts === "string" ? res.ts : undefined;
+    return { ref: ts ? { channel, ts } : null, threadTs: threadTs ?? ts };
+  } catch (err) {
+    console.error("[slack] human-agent post failed:", err instanceof Error ? err.message : err);
+    return { ref: null, threadTs };
+  }
+}
+
+/** Edit a live-handoff turn once the human replied or closed the case. Durable. */
+export async function resolveHumanAgentMessage(
+  ref: SlackRef | null,
+  detail: { reason?: string },
+  r: { reply?: string; by?: string; closed?: boolean },
+): Promise<void> {
+  "use step";
+  if (!ref || !isSlackConfigured()) return;
+  try {
+    await slack().chat.update({
+      channel: ref.channel,
+      ts: ref.ts,
+      text: r.closed ? "Case closed" : "Replied",
+      blocks: humanAgentResolvedBlocks(detail, r),
+    });
+  } catch (err) {
+    console.error("[slack] human-agent update failed:", err instanceof Error ? err.message : err);
   }
 }
 

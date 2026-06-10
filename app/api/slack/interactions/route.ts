@@ -71,6 +71,13 @@ export async function POST(req: Request) {
       return new Response(null, { status: 200 });
     }
 
+    // Close case → end a live human handoff. Resume the suspended turn with a close signal; the
+    // tool's resolve step updates this message to "Case closed".
+    if (action?.action_id === APPROVAL_ACTIONS.close) {
+      await resume(token, { approved: false, closed: true, by: userName(payload.user) });
+      return new Response(null, { status: 200 });
+    }
+
     // Escalate → re-post the SAME approval to the next tier and retire this message. The durable
     // run is untouched: it stays suspended on the same token — we only change who we're asking.
     if (action?.action_id === APPROVAL_ACTIONS.escalate && routing) {

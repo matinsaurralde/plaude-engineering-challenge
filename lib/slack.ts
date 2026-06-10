@@ -55,6 +55,7 @@ export const APPROVAL_ACTIONS = {
   deny: "approval_deny",
   input: "approval_input",
   escalate: "approval_escalate", // re-route the same approval up a tier (from Slack)
+  close: "approval_close", // end a live human handoff session
   details: "approval_details", // URL button — opens the Engineering view, no decision
 } as const;
 
@@ -222,6 +223,80 @@ export function escalatedBlocks(d: ApprovalDetails, toLabel: string): KnownBlock
   return [
     { type: "section", text: { type: "mrkdwn", text: `*${d.summary ?? d.action ?? "Approval"}*` } },
     { type: "context", elements: [{ type: "mrkdwn", text: `⤴ Escalated to *${toLabel}* — awaiting their decision` }] },
+  ];
+}
+
+/**
+ * A live "talk to a human" turn posted to Slack. Once a customer is handed off, the assistant only
+ * relays: every customer message is posted in ONE thread, the human hits Reply (reuses the input
+ * modal + hook), and they end it with Close case. The root message starts the thread; later turns
+ * are thread replies — keeps the channel clean.
+ */
+export function humanAgentBlocks(
+  d: { reason?: string; account?: string },
+  token: string,
+  opts: { detailsUrl?: string; root?: boolean } = {},
+): KnownBlock[] {
+  const blocks: KnownBlock[] = [];
+  if (opts.root) {
+    blocks.push({ type: "header", text: { type: "plain_text", text: "🙋 Live chat with customer", emoji: true } });
+    blocks.push({
+      type: "context",
+      elements: [
+        {
+          type: "mrkdwn",
+          text: `${d.account ? `Account *${d.account}* · ` : ""}Reply in this thread; the assistant relays it. Close the case when you're done.`,
+        },
+      ],
+    });
+  }
+  blocks.push({ type: "section", text: { type: "mrkdwn", text: `💬 *Customer:* ${d.reason ?? "(no message)"}` } });
+  blocks.push({
+    type: "actions",
+    elements: [
+      {
+        type: "button",
+        action_id: APPROVAL_ACTIONS.input,
+        style: "primary",
+        text: { type: "plain_text", text: "Reply" },
+        value: token,
+      },
+      {
+        type: "button",
+        action_id: APPROVAL_ACTIONS.close,
+        style: "danger",
+        text: { type: "plain_text", text: "Close case" },
+        value: token,
+      },
+      ...(opts.detailsUrl && opts.root
+        ? [
+            {
+              type: "button" as const,
+              action_id: APPROVAL_ACTIONS.details,
+              text: { type: "plain_text" as const, text: "View case" },
+              url: opts.detailsUrl,
+            },
+          ]
+        : []),
+    ],
+  });
+  return blocks;
+}
+
+/** A live-handoff turn after the human replied or closed the case. */
+export function humanAgentResolvedBlocks(
+  d: { reason?: string },
+  r: { by?: string; reply?: string; closed?: boolean },
+): KnownBlock[] {
+  const who = r.by ? ` *${r.by}*` : "";
+  const foot = r.closed
+    ? `🔒 Case closed${who ? ` by${who}` : ""}`
+    : r.reply
+      ? `✅ Replied${who ? ` by${who}` : ""}\n> ${r.reply}`
+      : `↩︎ No reply sent`;
+  return [
+    { type: "section", text: { type: "mrkdwn", text: `💬 *Customer:* ${d.reason ?? ""}` } },
+    { type: "context", elements: [{ type: "mrkdwn", text: foot }] },
   ];
 }
 

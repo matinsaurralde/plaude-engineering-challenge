@@ -10,6 +10,7 @@ export type CaseStatus =
   | "pending-approval"
   | "approved"
   | "denied"
+  | "closed"
   | "handled";
 
 export type TraceEventKind =
@@ -18,6 +19,7 @@ export type TraceEventKind =
   | "tool"
   | "approval-request"
   | "approval-resolved"
+  | "human-agent"
   | "security";
 
 export type TraceEvent = {
@@ -184,6 +186,38 @@ export function buildTimeline(messages: UIMessage[]): TraceEvent[] {
         return;
       }
 
+      if (t.name === "requestHumanAgent") {
+        const waiting = t.state === "input-available" || t.state === "input-streaming";
+        const replied = bool(t.output.replied);
+        const closed = bool(t.output.closed);
+        events.push({
+          key: `${m.id}:${i}:handoff-req`,
+          kind: "human-agent",
+          title: "Live chat with a human",
+          detail: str(t.input.reason),
+          why: "The customer is talking to a human agent — the assistant only relays.",
+          status: waiting ? "pending" : replied || closed ? "ok" : "denied",
+          input: t.input,
+          approvalToken: waiting ? t.toolCallId : undefined,
+          approval: { summary: str(t.input.reason), action: str(t.input.reason), riskLevel: "low" },
+        });
+        if (t.state === "output-available") {
+          const reply = str(t.output.reply);
+          const by = str(t.output.by);
+          events.push({
+            key: `${m.id}:${i}:handoff-res`,
+            kind: "human-agent",
+            title: closed ? "Live chat closed" : replied ? "Human agent replied" : "Waiting on a human",
+            detail: closed
+              ? `closed${by ? ` by ${by}` : ""}`
+              : [by ? `by ${by}` : "", reply ? `“${reply}”` : ""].filter(Boolean).join(" — "),
+            status: replied || closed ? "ok" : "denied",
+            output: t.output,
+          });
+        }
+        return;
+      }
+
       if (t.name === "requestHumanApproval") {
         const pending = t.state === "input-available" || t.state === "input-streaming";
         const approved = bool(t.output.approved);
@@ -244,6 +278,26 @@ export function buildTimeline(messages: UIMessage[]): TraceEvent[] {
   return events;
 }
 
+/**
+ * Is a live human handoff currently active, and which Slack thread does it live in? Derived from the
+ * last requestHumanAgent result: active until the human closes it. The client passes this back so the
+ * next turn stays in relay mode and in the same thread.
+ */
+export function liveHandoff(messages: UIMessage[]): { active: boolean; threadTs?: string } {
+  let active = false;
+  let threadTs: string | undefined;
+  for (const m of messages) {
+    for (const part of partsOf(m)) {
+      const t = asTool(part);
+      if (t?.name === "requestHumanAgent" && t.state === "output-available") {
+        active = !bool(t.output.closed);
+        threadTs = str(t.output.threadTs) ?? threadTs;
+      }
+    }
+  }
+  return { active, threadTs };
+}
+
 /** A compact, business-facing summary of the case (for the Engineering header). */
 export function deriveSummary(messages: UIMessage[]): CaseSummary {
   let account: CaseSummary["account"];
@@ -254,6 +308,7 @@ export function deriveSummary(messages: UIMessage[]): CaseSummary {
   let pending = false;
   let handledAction = false;
   let securityFlags = 0;
+  let handoffClosed = false;
 
   for (const m of messages) {
     for (const part of partsOf(m)) {
@@ -264,6 +319,11 @@ export function deriveSummary(messages: UIMessage[]): CaseSummary {
       toolCalls += 1;
 
       if (t.name === "flagSecurityConcern") securityFlags += 1;
+
+      // A live human handoff that the human closed resolves the case (latest result wins).
+      if (t.name === "requestHumanAgent" && t.state === "output-available") {
+        handoffClosed = bool(t.output.closed) ?? false;
+      }
 
       if (t.name === "lookupAccount" && bool(t.output.found)) {
         account = {
@@ -308,6 +368,7 @@ export function deriveSummary(messages: UIMessage[]): CaseSummary {
   let status: CaseStatus = "idle";
   if (messages.length === 0) status = "idle";
   else if (pending) status = "pending-approval";
+  else if (handoffClosed) status = "closed";
   else if (approval?.decision) status = approval.decision.approved ? "approved" : "denied";
   else if (handledAction || messages.some((m) => m.role === "assistant")) status = "handled";
   else status = "active";

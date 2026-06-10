@@ -11,6 +11,7 @@ export const approvalDecisionSchema = z.object({
   note: z.string().optional(), // optional comment / free-text input from the human
   tier: z.string().optional(), // the approver tier that made the decision
   escalatedFrom: z.array(z.string()).optional(), // tiers it was escalated through to reach the decider
+  closed: z.boolean().optional(), // live human handoff: the human ended the session
 });
 
 export type ApprovalDecision = z.infer<typeof approvalDecisionSchema>;

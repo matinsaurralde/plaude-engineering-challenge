@@ -11,13 +11,15 @@ import { DEFAULT_INSTRUCTIONS } from "@/lib/agent/instructions";
 export const maxDuration = 60;
 
 export async function POST(req: Request) {
-  const { messages, instructions, caseId, authenticatedAccountId, quarantined } =
+  const { messages, instructions, caseId, authenticatedAccountId, quarantined, humanMode, humanThreadTs } =
     (await req.json()) as {
       messages: UIMessage[];
       instructions?: string;
       caseId?: string;
       authenticatedAccountId?: string;
       quarantined?: boolean;
+      humanMode?: boolean;
+      humanThreadTs?: string;
     };
 
   const modelMessages = await convertToModelMessages(messages);
@@ -30,8 +32,16 @@ export async function POST(req: Request) {
     caseId,
     authenticatedAccountId,
     Boolean(quarantined),
+    Boolean(humanMode),
+    typeof humanThreadTs === "string" ? humanThreadTs : undefined,
   ]);
 
-  // run.readable carries the UIMessageChunks the agent writes inside the workflow.
-  return createUIMessageStreamResponse({ stream: run.readable });
+  // run.readable carries the UIMessageChunks the agent writes inside the workflow. We also return
+  // the run id so the client (WorkflowChatTransport) can reconnect to this exact run if the stream
+  // drops — a 60s function timeout, a page refresh, or a multi-minute Slack approval wait no longer
+  // strands the durable run with no way to deliver its result back to the browser.
+  return createUIMessageStreamResponse({
+    stream: run.readable,
+    headers: { "x-workflow-run-id": run.runId },
+  });
 }
