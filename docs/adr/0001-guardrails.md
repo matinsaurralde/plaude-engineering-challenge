@@ -31,6 +31,9 @@ arbitrary account id a message names.
    - **Approval integrity.** Only a real `{ approved: true }` returned by `requestHumanApproval`
      (resolved by a human in Slack or the operator console) authorizes a sensitive action. The
      model cannot self-approve, and no message can grant, waive, or lower the thresholds.
+     A reviewer **asking the customer a question is not a decision**: it resumes the hook as
+     `needsInput`, the agent relays the question, and the approval stays open until a real
+     verdict — so a clarifying question can never accidentally authorize a transfer.
 
 The chat surface is the **customer's** view (no approval controls); approvals happen only in the
 **operator console** (Engineering tab) and **Slack**.
