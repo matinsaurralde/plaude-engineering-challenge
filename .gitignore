@@ -43,6 +43,8 @@ next-env.d.ts
 
 # WorkflowDevKit generated routes/manifest (regenerated on every build)
 /app/.well-known/
+# WorkflowDevKit Local World durable state (local runtime only)
+/.workflow-data/
 
 # GSD planning + agent guides (local only)
 /.planning/
