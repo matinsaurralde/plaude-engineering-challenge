@@ -23,6 +23,7 @@ export async function chatWorkflow(
   quarantined?: boolean,
   humanMode?: boolean,
   humanThreadTs?: string,
+  approvalThreadTs?: string,
 ) {
   "use workflow";
 
@@ -55,7 +56,7 @@ export async function chatWorkflow(
     stopWhen: stepCountIs(12),
     // Flows to tools: caseId deep-links Slack to the case; authedAccount enforces account-level
     // authorization; quarantined fails sensitive tools closed after repeated manipulation;
-    // humanThreadTs keeps a live handoff in one Slack thread.
-    experimental_context: { caseId, authedAccount, quarantined: !!quarantined, humanThreadTs },
+    // humanThreadTs / approvalThreadTs keep a live handoff and a case's approvals in one Slack thread.
+    experimental_context: { caseId, authedAccount, quarantined: !!quarantined, humanThreadTs, approvalThreadTs },
   });
 }

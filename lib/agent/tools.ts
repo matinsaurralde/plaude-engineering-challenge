@@ -169,9 +169,10 @@ async function requestHumanApproval(
     tierIndex?: number;
   },
   { toolCallId, experimental_context }: { toolCallId: string; experimental_context?: unknown },
-): Promise<ApprovalDecision> {
+): Promise<ApprovalDecision & { threadTs?: string }> {
   const details = { summary: input.summary, action: input.action, riskLevel: input.riskLevel };
-  const caseId = (experimental_context as { caseId?: string } | undefined)?.caseId;
+  const ctx = experimental_context as { caseId?: string; approvalThreadTs?: string } | undefined;
+  const caseId = ctx?.caseId;
 
   // The escalation ladder is policy, not a model decision. The model only chooses where an approval
   // STARTS (tierIndex); the ladder itself always spans at least the canonical tiers so a human can
@@ -189,8 +190,14 @@ async function requestHumanApproval(
 
   // Post to Slack (if configured), then suspend the durable run on a hook keyed by this tool
   // call. The Slack buttons and the in-app card both resume the very same token. Zero compute
-  // is used while suspended.
-  const slackRef = await postApprovalToSlack(details, toolCallId, caseId, routing);
+  // is used while suspended. Later rounds of the same case thread under the first message.
+  const { ref: slackRef, threadTs } = await postApprovalToSlack(
+    details,
+    toolCallId,
+    caseId,
+    routing,
+    ctx?.approvalThreadTs,
+  );
   const hook = approvalHook.create({ token: toolCallId });
 
   const TIMED_OUT = Symbol("timed-out");
@@ -211,7 +218,7 @@ async function requestHumanApproval(
   }
 
   await resolveSlackMessage(slackRef, details, decision);
-  return decision;
+  return { ...decision, threadTs };
 }
 
 // ── Human handoff (workflow-level, suspends like an approval) ─────────────────

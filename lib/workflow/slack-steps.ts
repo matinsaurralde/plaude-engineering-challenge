@@ -24,27 +24,34 @@ function engineeringUrl(caseId?: string): string {
  * Post the approval request to Slack. Marked `"use step"` so it runs exactly once and is NOT
  * replayed when the workflow resumes after the human responds (otherwise every resume would
  * post a duplicate message).
+ *
+ * The first approval of a case creates the thread root; every later approval round (e.g. after the
+ * reviewer asked the customer something) posts as a reply in that same thread, so one case never
+ * spreads across the channel. Returns the thread root ts so the caller can keep threading.
  */
 export async function postApprovalToSlack(
   details: ApprovalDetails,
   token: string,
   caseId?: string,
   routing?: ApprovalRouting,
-): Promise<SlackRef | null> {
+  threadTs?: string,
+): Promise<{ ref: SlackRef | null; threadTs?: string }> {
   "use step";
-  if (!isSlackConfigured()) return null;
+  if (!isSlackConfigured()) return { ref: null, threadTs };
   const channel = process.env.SLACK_APPROVAL_CHANNEL_ID as string;
   try {
     const res = await slack().chat.postMessage({
       channel,
+      thread_ts: threadTs,
       text: `Approval required: ${details.action ?? details.summary ?? "action"}`,
-      blocks: approvalBlocks(details, token, { detailsUrl: engineeringUrl(caseId), routing }),
+      blocks: approvalBlocks(details, token, { detailsUrl: engineeringUrl(caseId), routing, threadTs }),
     });
-    return typeof res.ts === "string" ? { channel, ts: res.ts } : null;
+    const ts = typeof res.ts === "string" ? res.ts : undefined;
+    return { ref: ts ? { channel, ts } : null, threadTs: threadTs ?? ts };
   } catch (err) {
     // Don't let a Slack misconfig break the run — fall back to in-app approval.
     console.error("[slack] postMessage failed:", err instanceof Error ? err.message : err);
-    return null;
+    return { ref: null, threadTs };
   }
 }
 

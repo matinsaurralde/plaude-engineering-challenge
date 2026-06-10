@@ -309,6 +309,23 @@ export function liveHandoff(messages: UIMessage[]): { active: boolean; threadTs?
   return { active, threadTs };
 }
 
+/**
+ * The Slack thread this case's approvals live in (the first approval message becomes the root).
+ * The client passes it back each turn so every approval round of a case stays in ONE thread.
+ */
+export function approvalThread(messages: UIMessage[]): string | undefined {
+  let threadTs: string | undefined;
+  for (const m of messages) {
+    for (const part of partsOf(m)) {
+      const t = asTool(part);
+      if (t?.name === "requestHumanApproval" && t.state === "output-available") {
+        threadTs = str(t.output.threadTs) ?? threadTs;
+      }
+    }
+  }
+  return threadTs;
+}
+
 /** A compact, business-facing summary of the case (for the Engineering header). */
 export function deriveSummary(messages: UIMessage[]): CaseSummary {
   let account: CaseSummary["account"];

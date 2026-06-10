@@ -11,16 +11,25 @@ import { DEFAULT_INSTRUCTIONS } from "@/lib/agent/instructions";
 export const maxDuration = 60;
 
 export async function POST(req: Request) {
-  const { messages, instructions, caseId, authenticatedAccountId, quarantined, humanMode, humanThreadTs } =
-    (await req.json()) as {
-      messages: UIMessage[];
-      instructions?: string;
-      caseId?: string;
-      authenticatedAccountId?: string;
-      quarantined?: boolean;
-      humanMode?: boolean;
-      humanThreadTs?: string;
-    };
+  const {
+    messages,
+    instructions,
+    caseId,
+    authenticatedAccountId,
+    quarantined,
+    humanMode,
+    humanThreadTs,
+    approvalThreadTs,
+  } = (await req.json()) as {
+    messages: UIMessage[];
+    instructions?: string;
+    caseId?: string;
+    authenticatedAccountId?: string;
+    quarantined?: boolean;
+    humanMode?: boolean;
+    humanThreadTs?: string;
+    approvalThreadTs?: string;
+  };
 
   const modelMessages = await convertToModelMessages(messages);
 
@@ -34,6 +43,7 @@ export async function POST(req: Request) {
     Boolean(quarantined),
     Boolean(humanMode),
     typeof humanThreadTs === "string" ? humanThreadTs : undefined,
+    typeof approvalThreadTs === "string" ? approvalThreadTs : undefined,
   ]);
 
   // run.readable carries the UIMessageChunks the agent writes inside the workflow. We also return

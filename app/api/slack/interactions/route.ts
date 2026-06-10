@@ -60,7 +60,7 @@ export async function POST(req: Request) {
     // "View case details" is a URL button — Slack already opened the link, nothing to resume.
     if (action?.action_id === APPROVAL_ACTIONS.details) return new Response(null, { status: 200 });
 
-    const { token, routing, details, detailsUrl } = decodeApproval(action?.value);
+    const { token, routing, details, detailsUrl, threadTs } = decodeApproval(action?.value);
     if (!token) return new Response(null, { status: 200 });
 
     // Provide input → open the free-text modal, keyed to the same durable token.
@@ -84,10 +84,14 @@ export async function POST(req: Request) {
       const channel = payload.container?.channel_id;
       const toLabel = routing.tiers[routing.tierIndex] ?? "next tier";
       if (isSlackConfigured() && channel) {
+        // Keep the escalated message in the approval's thread (the clicked message IS the root when
+        // no thread ts travelled in the button — i.e. the first message of the case).
+        const root = threadTs ?? payload.container?.message_ts;
         await slack().chat.postMessage({
           channel,
+          thread_ts: root,
           text: `Approval escalated to ${toLabel}`,
-          blocks: approvalBlocks(details, token, { routing, detailsUrl }),
+          blocks: approvalBlocks(details, token, { routing, detailsUrl, threadTs: root }),
         });
         if (payload.container?.message_ts) {
           await slack().chat.update({

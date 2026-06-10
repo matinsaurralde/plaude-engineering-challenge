@@ -8,6 +8,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { DEFAULT_INSTRUCTIONS } from "@/lib/agent/instructions";
 import {
+  approvalThread,
   buildExport,
   buildTimeline,
   deriveSummary,
@@ -224,6 +225,8 @@ export default function Home() {
   // A live human handoff stays active (and in one Slack thread) until a human closes it. We pass
   // this back each turn so the agent keeps relaying instead of answering.
   const live = useMemo(() => liveHandoff(messages), [messages]);
+  // The Slack thread this case's approvals live in — keeps every approval round in one thread.
+  const approvalTs = useMemo(() => approvalThread(messages), [messages]);
   const pending = timeline.find(
     (e) => (e.kind === "approval-request" || e.kind === "human-agent") && e.approvalToken,
   );
@@ -261,6 +264,7 @@ export default function Home() {
           quarantined,
           humanMode: live.active,
           humanThreadTs: live.threadTs,
+          approvalThreadTs: approvalTs,
         },
       },
     );

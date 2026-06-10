@@ -14,7 +14,17 @@ export type ApprovalRouting = {
   from: string[]; // tier labels it was escalated through to reach here
 };
 
-type BtnPayload = { t: string; x: string[]; i: number; f: string[]; s?: string; a?: string; r?: string; u?: string };
+type BtnPayload = {
+  t: string;
+  x: string[];
+  i: number;
+  f: string[];
+  s?: string;
+  a?: string;
+  r?: string;
+  u?: string;
+  h?: string; // Slack thread root ts — keeps escalations in the same thread as the approval
+};
 
 function encodeBtn(p: BtnPayload): string {
   // Slack action `value` is capped at 2000 chars — clip the free-text fields defensively.
@@ -27,6 +37,7 @@ export function decodeApproval(value?: string): {
   routing?: ApprovalRouting;
   details: ApprovalDetails;
   detailsUrl?: string;
+  threadTs?: string;
 } {
   if (value) {
     try {
@@ -41,6 +52,7 @@ export function decodeApproval(value?: string): {
           },
           details: { summary: o.s, action: o.a, riskLevel: o.r },
           detailsUrl: typeof o.u === "string" ? o.u : undefined,
+          threadTs: typeof o.h === "string" ? o.h : undefined,
         };
       }
     } catch {
@@ -98,7 +110,7 @@ const RISK_EMOJI: Record<string, string> = { high: "🔴", medium: "🟠", low: 
 export function approvalBlocks(
   d: ApprovalDetails,
   token: string,
-  opts: { detailsUrl?: string; routing?: ApprovalRouting } = {},
+  opts: { detailsUrl?: string; routing?: ApprovalRouting; threadTs?: string } = {},
 ): KnownBlock[] {
   const risk = d.riskLevel ?? "medium";
   const routing = opts.routing;
@@ -115,6 +127,7 @@ export function approvalBlocks(
     a: d.action,
     r: d.riskLevel,
     u: opts.detailsUrl,
+    h: opts.threadTs,
   };
   const value = routing ? encodeBtn(base) : token;
   const escalateValue =
