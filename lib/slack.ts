@@ -141,7 +141,7 @@ export function approvalBlocks(
       elements: [
         { type: "button", action_id: APPROVAL_ACTIONS.approve, style: "primary", text: { type: "plain_text", text: "Approve" }, value },
         { type: "button", action_id: APPROVAL_ACTIONS.deny, style: "danger", text: { type: "plain_text", text: "Deny" }, value },
-        { type: "button", action_id: APPROVAL_ACTIONS.input, text: { type: "plain_text", text: "Provide input" }, value },
+        { type: "button", action_id: APPROVAL_ACTIONS.input, text: { type: "plain_text", text: "Ask the customer" }, value },
         ...(escalateValue
           ? [
               {
@@ -169,9 +169,22 @@ export function approvalBlocks(
 
 export function resolvedBlocks(
   d: ApprovalDetails,
-  decision: { approved: boolean; by?: string; note?: string; tier?: string; escalatedFrom?: string[] },
+  decision: {
+    approved: boolean;
+    by?: string;
+    note?: string;
+    tier?: string;
+    escalatedFrom?: string[];
+    needsInput?: boolean;
+  },
 ): KnownBlock[] {
-  const verdict = decision.approved ? "✅ Approved" : "❌ Denied";
+  // `needsInput` means the reviewer asked the customer something — it's NOT a decision, so never
+  // render it as an approval. The agent relays the question and comes back for a real decision.
+  const verdict = decision.needsInput
+    ? "💬 Asked the customer"
+    : decision.approved
+      ? "✅ Approved"
+      : "❌ Denied";
   const by = decision.by ? ` by *${decision.by}*` : "";
   const tier = decision.tier ? ` · Tier: *${decision.tier}*` : "";
   const esc = decision.escalatedFrom?.length ? `\n⤴ Escalated from ${decision.escalatedFrom.join(" → ")}` : "";

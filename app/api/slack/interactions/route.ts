@@ -123,11 +123,14 @@ export async function POST(req: Request) {
     return new Response(null, { status: 200 });
   }
 
-  // Modal submit: free-text input (treated as approve-with-input)
+  // Modal submit: free-text input. This is NOT a decision — a reviewer asking the customer something
+  // (or relaying a message in a live handoff) must never count as an approval. The agent treats
+  // `needsInput` as "ask the customer, then come back for a real decision"; only the Approve button
+  // resumes with approved: true. (A handoff reply just carries the note.)
   if (payload.type === "view_submission") {
     const token = payload.view?.private_metadata;
     const note = payload.view?.state?.values?.note_block?.note?.value ?? "";
-    if (token) await resume(token, { approved: true, by: userName(payload.user), note });
+    if (token) await resume(token, { approved: false, by: userName(payload.user), note, needsInput: true });
     return Response.json({ response_action: "clear" });
   }
 

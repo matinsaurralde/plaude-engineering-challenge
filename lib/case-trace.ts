@@ -221,13 +221,14 @@ export function buildTimeline(messages: UIMessage[]): TraceEvent[] {
       if (t.name === "requestHumanApproval") {
         const pending = t.state === "input-available" || t.state === "input-streaming";
         const approved = bool(t.output.approved);
+        const needsInput = bool(t.output.needsInput);
         events.push({
           key: `${m.id}:${i}:approval-req`,
           kind: "approval-request",
           title: "Human approval requested",
           detail: str(t.input.summary) ?? str(t.input.action),
           why: whyApproval(t.input),
-          status: pending ? "pending" : approved ? "ok" : "denied",
+          status: pending || needsInput ? "pending" : approved ? "ok" : "denied",
           input: t.input,
           approvalToken: pending ? t.toolCallId : undefined,
           approval: {
@@ -247,16 +248,26 @@ export function buildTimeline(messages: UIMessage[]): TraceEvent[] {
           events.push({
             key: `${m.id}:${i}:approval-res`,
             kind: "approval-resolved",
-            title: approved ? "Approved" : autoDenied ? "Auto-denied" : "Denied",
-            detail: [
-              autoDenied ? "no reviewer responded in time" : by ? `by ${by}` : "",
-              tier ? `tier ${tier}` : "",
-              esc.length ? `escalated from ${esc.join(" → ")}` : "",
-              note ? `“${note}”` : "",
-            ]
-              .filter(Boolean)
-              .join(" — "),
-            status: approved ? "ok" : "denied",
+            title: needsInput
+              ? "Question to customer"
+              : approved
+                ? "Approved"
+                : autoDenied
+                  ? "Auto-denied"
+                  : "Denied",
+            detail: needsInput
+              ? [by ? `by ${by}` : "", note ? `asked: “${note}”` : "asked the customer"]
+                  .filter(Boolean)
+                  .join(" — ")
+              : [
+                  autoDenied ? "no reviewer responded in time" : by ? `by ${by}` : "",
+                  tier ? `tier ${tier}` : "",
+                  esc.length ? `escalated from ${esc.join(" → ")}` : "",
+                  note ? `“${note}”` : "",
+                ]
+                  .filter(Boolean)
+                  .join(" — "),
+            status: needsInput ? "pending" : approved ? "ok" : "denied",
             output: t.output,
           });
         }
@@ -345,7 +356,8 @@ export function deriveSummary(messages: UIMessage[]): CaseSummary {
         if (!operation) {
           operation = { kind: "approval", ref: str(t.input.action) };
         }
-        if (t.state === "output-available") {
+        // needsInput is a question, not a decision — the approval stays open until a real verdict.
+        if (t.state === "output-available" && !bool(t.output.needsInput)) {
           const escalatedFrom = strArr(t.output.escalatedFrom);
           approval = {
             required: true,
@@ -357,6 +369,7 @@ export function deriveSummary(messages: UIMessage[]): CaseSummary {
               escalatedFrom: escalatedFrom.length ? escalatedFrom : undefined,
             },
           };
+          pending = false;
         } else {
           approval = { required: true };
           pending = true;

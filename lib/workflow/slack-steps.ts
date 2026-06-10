@@ -120,7 +120,14 @@ export async function resolveHumanAgentMessage(
 export async function resolveSlackMessage(
   ref: SlackRef | null,
   details: ApprovalDetails,
-  decision: { approved: boolean; by?: string; note?: string; tier?: string; escalatedFrom?: string[] },
+  decision: {
+    approved: boolean;
+    by?: string;
+    note?: string;
+    tier?: string;
+    escalatedFrom?: string[];
+    needsInput?: boolean;
+  },
 ): Promise<void> {
   "use step";
   if (!ref || !isSlackConfigured()) return;
@@ -128,7 +135,7 @@ export async function resolveSlackMessage(
     await slack().chat.update({
       channel: ref.channel,
       ts: ref.ts,
-      text: decision.approved ? "Approved" : "Denied",
+      text: decision.needsInput ? "Asked the customer" : decision.approved ? "Approved" : "Denied",
       blocks: resolvedBlocks(details, decision),
     });
   } catch (err) {

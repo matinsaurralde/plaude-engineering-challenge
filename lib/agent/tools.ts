@@ -241,12 +241,11 @@ async function requestHumanAgent(
     result = { replied: false }; // nobody answered in time → the agent offers a graceful fallback
   } else if (outcome.closed) {
     result = { replied: false, closed: true, by: outcome.by }; // the human ended the session
+  } else if (outcome.note?.trim()) {
+    // The human replied via the Slack input modal (resumes with a note) or the in-app reply box.
+    result = { replied: true, reply: outcome.note.trim(), by: outcome.by };
   } else {
-    // The human replies through the Slack input modal → resumes as { approved: true, note: <reply> }.
-    result =
-      outcome.approved && outcome.note?.trim()
-        ? { replied: true, reply: outcome.note.trim(), by: outcome.by }
-        : { replied: false, by: outcome.by };
+    result = { replied: false, by: outcome.by };
   }
 
   await resolveHumanAgentMessage(ref, detail, { reply: result.reply, by: result.by, closed: result.closed });
