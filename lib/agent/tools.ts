@@ -54,7 +54,13 @@ const ACCOUNTS: Record<string, Account> = {
   },
 };
 
-const APPROVAL_TIMEOUT_MS = 5 * 60_000; // 5 minutes, then deny by default (HITL-05)
+// How long to wait for a human before failing CLOSED (deny). The durable run suspends with zero
+// compute for this whole window, so we keep it generous — a short auto-deny would undercut the
+// entire "pause for a human, resume later" guarantee. It's a system/security parameter, not agent
+// policy: it lives in code (not the editable instructions) so a prompt can't talk the agent into
+// waiving its own approval window. Override per-deploy via APPROVAL_TIMEOUT_MS (milliseconds) —
+// e.g. set it to 120000 to demo the timeout, or leave the 24h default for normal use.
+const APPROVAL_TIMEOUT_MS = Number(process.env.APPROVAL_TIMEOUT_MS) || 24 * 60 * 60_000;
 
 // ── Tool-level authorization (defense in depth) ──────────────────────────────
 // The customer is "signed in" as one account (passed via experimental_context from the UI).
@@ -165,9 +171,13 @@ async function requestHumanApproval(
   const details = { summary: input.summary, action: input.action, riskLevel: input.riskLevel };
   const caseId = (experimental_context as { caseId?: string } | undefined)?.caseId;
 
-  // Approver tiers come from the plain-text policy (the model passes them); fall back to the
-  // default ladder so routing never breaks. A human can escalate up the ladder from Slack.
-  const tiers = input.tiers && input.tiers.length ? input.tiers : [...DEFAULT_TIERS];
+  // The escalation ladder is policy, not a model decision. The model only chooses where an approval
+  // STARTS (tierIndex); the ladder itself always spans at least the canonical tiers so a human can
+  // always escalate up to the top. The model may EXTEND it (e.g. add a higher "Legal" tier) but must
+  // never be able to truncate it — a truncated ladder silently strands an approval at a tier with
+  // nothing above it, which is exactly what breaks "escalate from Slack".
+  const modelTiers = input.tiers?.map((t) => t.trim()).filter(Boolean) ?? [];
+  const tiers = modelTiers.length >= DEFAULT_TIERS.length ? modelTiers : [...DEFAULT_TIERS];
   // If the model routes by amount it sets tierIndex; otherwise default by risk so a high-risk
   // action still lands on the top tier (Compliance) instead of silently sitting at tier 0.
   const riskDefaultTier: Record<string, number> = { high: 2, medium: 1, low: 0 };
@@ -190,7 +200,10 @@ async function requestHumanApproval(
   let decision: ApprovalDecision;
   if (typeof outcome === "symbol") {
     hook.dispose();
-    decision = { approved: false, by: "system", note: "Approval timed out — denied by default." };
+    // Fail closed. `by: "system"` is the audit marker for a timeout — we deliberately attach NO
+    // note, so the agent never sees (and can't parrot) the internal reason to the customer. The
+    // Engineering timeline renders this as an auto-deny; the customer just gets a graceful decline.
+    decision = { approved: false, by: "system" };
   } else {
     decision = outcome;
   }

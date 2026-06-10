@@ -207,12 +207,15 @@ export function buildTimeline(messages: UIMessage[]): TraceEvent[] {
           const note = str(t.output.note);
           const tier = str(t.output.tier);
           const esc = strArr(t.output.escalatedFrom);
+          // `by: "system"` with no human decision means the approval window elapsed — surface that
+          // clearly for the operator (the customer never sees this internal reason).
+          const autoDenied = !approved && by === "system";
           events.push({
             key: `${m.id}:${i}:approval-res`,
             kind: "approval-resolved",
-            title: approved ? "Approved" : "Denied",
+            title: approved ? "Approved" : autoDenied ? "Auto-denied" : "Denied",
             detail: [
-              by ? `by ${by}` : "",
+              autoDenied ? "no reviewer responded in time" : by ? `by ${by}` : "",
               tier ? `tier ${tier}` : "",
               esc.length ? `escalated from ${esc.join(" → ")}` : "",
               note ? `“${note}”` : "",
