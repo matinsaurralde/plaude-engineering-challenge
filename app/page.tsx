@@ -505,13 +505,13 @@ function ChatTab({
 
   return (
     <div ref={scrollRef} className="h-full overflow-y-auto">
+      {restricted && (
+        <div className="sticky top-0 z-10 flex items-center justify-center gap-2 border-b border-rose-500/40 bg-rose-950/90 px-4 py-2.5 text-sm font-medium text-rose-200 backdrop-blur">
+          <span aria-hidden>🔒</span>
+          Session restricted after repeated suspicious activity — sensitive actions are paused.
+        </div>
+      )}
       <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 py-6">
-        {restricted && (
-          <div className="flex items-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2.5 text-sm text-rose-300">
-            <span aria-hidden>🔒</span>
-            This session is restricted after repeated suspicious activity — sensitive actions are paused.
-          </div>
-        )}
         {messages.length === 0 ? (
           <div className="mt-[8vh] flex flex-col items-center text-center">
             {identity && (
