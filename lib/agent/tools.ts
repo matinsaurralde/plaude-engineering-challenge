@@ -191,7 +191,7 @@ async function requestHumanApproval(
   // Post to Slack (if configured), then suspend the durable run on a hook keyed by this tool
   // call. The Slack buttons and the in-app card both resume the very same token. Zero compute
   // is used while suspended. Later rounds of the same case thread under the first message.
-  const { ref: slackRef, threadTs } = await postApprovalToSlack(
+  const { ref: slackRef, threadTs, details: enDetails } = await postApprovalToSlack(
     details,
     toolCallId,
     caseId,
@@ -217,7 +217,7 @@ async function requestHumanApproval(
     decision = outcome;
   }
 
-  await resolveSlackMessage(slackRef, details, decision);
+  await resolveSlackMessage(slackRef, enDetails, decision);
   return { ...decision, threadTs };
 }
 
@@ -236,7 +236,12 @@ async function requestHumanAgent(
   const detail = { reason: input.reason, account: ctx?.authedAccount };
 
   // First turn creates the thread; later turns reuse it so the whole chat stays in one Slack thread.
-  const { ref, threadTs } = await postHumanAgentToSlack(detail, toolCallId, ctx?.caseId, ctx?.humanThreadTs);
+  const { ref, threadTs, detail: enDetail } = await postHumanAgentToSlack(
+    detail,
+    toolCallId,
+    ctx?.caseId,
+    ctx?.humanThreadTs,
+  );
   const hook = approvalHook.create({ token: toolCallId });
 
   const TIMED_OUT = Symbol("timed-out");
@@ -255,7 +260,7 @@ async function requestHumanAgent(
     result = { replied: false, by: outcome.by };
   }
 
-  await resolveHumanAgentMessage(ref, detail, { reply: result.reply, by: result.by, closed: result.closed });
+  await resolveHumanAgentMessage(ref, enDetail, { reply: result.reply, by: result.by, closed: result.closed });
   return { ...result, threadTs };
 }
 
