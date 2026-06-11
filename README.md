@@ -9,7 +9,7 @@ human responds.
 Built with [WorkflowDevKit](https://workflow-sdk.dev) (`DurableAgent`) on Next.js, as an
 engineering challenge for [Plaude](https://plaude.com).
 
-> **▶ Live demo: _<link goes here once deployed>_**
+> **▶ Live demo: <https://plaude-engineering-challenge.vercel.app>**
 >
 > Talk to **Matute**, the demo fintech support agent. Its entire behaviour — including
 > *when* to escalate to a human — comes from editable plain-text instructions, not hardcoded
