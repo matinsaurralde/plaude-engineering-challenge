@@ -8,6 +8,7 @@ import {
   postSecurityAlertToSlack,
   resolveHumanAgentMessage,
   resolveSlackMessage,
+  translateReplyForCustomer,
 } from "@/lib/workflow/slack-steps";
 import { DEFAULT_TIERS } from "@/lib/approval-tiers";
 
@@ -231,7 +232,7 @@ async function requestHumanAgent(
   { toolCallId, experimental_context }: { toolCallId: string; experimental_context?: unknown },
 ): Promise<{ replied: boolean; reply?: string; by?: string; threadTs?: string; closed?: boolean }> {
   const ctx = experimental_context as
-    | { caseId?: string; authedAccount?: string; humanThreadTs?: string }
+    | { caseId?: string; authedAccount?: string; humanThreadTs?: string; lastCustomerMessage?: string }
     | undefined;
   const detail = { reason: input.reason, account: ctx?.authedAccount };
 
@@ -255,7 +256,14 @@ async function requestHumanAgent(
     result = { replied: false, closed: true, by: outcome.by }; // the human ended the session
   } else if (outcome.note?.trim()) {
     // The human replied via the Slack input modal (resumes with a note) or the in-app reply box.
-    result = { replied: true, reply: outcome.note.trim(), by: outcome.by };
+    // Guarantee it reaches the customer in THEIR language: rewrite the reply into the language of the
+    // customer's latest message (deterministic step) so a relay never slips into the reviewer's
+    // language. The agent then passes it straight through. Best-effort — falls back to the raw note.
+    const note = outcome.note.trim();
+    const reply = ctx?.lastCustomerMessage
+      ? await translateReplyForCustomer(note, ctx.lastCustomerMessage)
+      : note;
+    result = { replied: true, reply, by: outcome.by };
   } else {
     result = { replied: false, by: outcome.by };
   }
@@ -351,8 +359,9 @@ export const tools = {
       "person / human / agent, and then for EVERY message while the live chat is active, passing the " +
       "customer's message (TRANSLATED INTO ENGLISH — reviewers read English) as `reason`. It pauses " +
       "and relays to a human, who replies or closes the case. " +
-      "Returns { replied, reply, by, closed }. If replied is true, pass `reply` to the customer in their " +
-      "language, naturally, as if relaying a colleague (don't quote it as a system message). If closed " +
+      "Returns { replied, reply, by, closed }. If replied is true, `reply` is ALREADY in the customer's " +
+      "language — pass it straight to the customer as-is, naturally, as if relaying a colleague (don't " +
+      "translate it, switch its language, or quote it as a system message). If closed " +
       "is true, the human ended the chat — tell the customer the agent has wrapped up and that you can " +
       "keep helping. If neither, no one answered yet — apologize briefly and offer to wait or try later. " +
       "Never mention Slack, tools, or how the handoff works; don't use it to bypass approval or account scope.",

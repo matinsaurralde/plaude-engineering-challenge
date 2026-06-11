@@ -48,6 +48,37 @@ async function toEnglish(text?: string): Promise<string | undefined> {
 }
 
 /**
+ * Translate a human agent's reply into the customer's own language, deterministically. The relay is
+ * the reverse of `toEnglish`: the reviewer typed in whatever language they like, but the customer
+ * must read it in theirs. The agent is *asked* to do this, but that's probabilistic and slips (it
+ * stays stuck on an earlier language); this is the guarantee. `sample` is the customer's own latest
+ * message — we rewrite the reply into the same language as that. Marked `"use step"` so the Haiku
+ * call runs once and is memoized on replay. Best-effort — any failure falls back to the raw reply.
+ */
+export async function translateReplyForCustomer(reply: string, sample: string): Promise<string> {
+  "use step";
+  const r = reply.trim();
+  const s = sample.trim();
+  if (!r || !s) return reply;
+  try {
+    const { text } = await generateText({
+      model: anthropic("claude-haiku-4-5"),
+      prompt:
+        "You relay a support chat. The CUSTOMER wrote the message below in their own language. " +
+        "Rewrite the AGENT REPLY so it is in the SAME language as the customer's message — natural, " +
+        "as if the agent wrote it directly to the customer. If the reply is already in that language, " +
+        "return it unchanged. Keep names, amounts, currencies, account ids and order ids exactly as " +
+        "written. Output only the rewritten reply — no preamble, quotes, or labels.\n\n" +
+        "CUSTOMER MESSAGE (their language):\n" + s + "\n\nAGENT REPLY (rewrite into the customer's language):\n" + r,
+    });
+    return text.trim() || r;
+  } catch (err) {
+    console.error("[translate] translateReplyForCustomer failed:", err instanceof Error ? err.message : err);
+    return r;
+  }
+}
+
+/**
  * Post the approval request to Slack. Marked `"use step"` so it runs exactly once and is NOT
  * replayed when the workflow resumes after the human responds (otherwise every resume would
  * post a duplicate message).

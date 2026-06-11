@@ -8,6 +8,32 @@ import { tools } from "@/lib/agent/tools";
 export const AGENT_MODEL = "claude-sonnet-4-6";
 
 /**
+ * The text of the customer's most recent message. It's the language anchor for a live handoff: the
+ * reviewer's reply is rewritten into the language of *this* message before it reaches the customer,
+ * so a relay never slips into the reviewer's language regardless of what the agent does.
+ */
+function lastCustomerText(messages: ModelMessage[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role !== "user") continue;
+    const content = messages[i].content as unknown;
+    if (typeof content === "string") return content.trim() || undefined;
+    if (Array.isArray(content)) {
+      const text = content
+        .map((p) =>
+          p && typeof p === "object" && (p as { type?: string }).type === "text"
+            ? ((p as { text?: string }).text ?? "")
+            : "",
+        )
+        .join(" ")
+        .trim();
+      return text || undefined;
+    }
+    return undefined;
+  }
+  return undefined;
+}
+
+/**
  * The durable chat workflow.
  *
  * `"use workflow"` makes this a durable run: its state is persisted, so it survives
@@ -40,7 +66,7 @@ export async function chatWorkflow(
 
   // While a live human handoff is active, the agent is ONLY a relay — it must not answer or act.
   const liveNote = humanMode
-    ? `\n\n## Live human handoff (ACTIVE)\nThe customer is in a live chat with a human agent. You are ONLY a relay: do NOT answer, look up accounts, issue refunds, transfer, or take ANY action yourself. For the customer's message, call requestHumanAgent with their message translated into ENGLISH as \`reason\` (reviewers read English), then relay the human's reply back in the customer's own language. If requestHumanAgent returns { closed: true } the live chat is over: reply with ONE short sentence that just asks if there's anything else you can help with — nothing more. Do NOT recap, and do NOT resume or re-ask about their earlier request. Never break character or mention Slack/tools.`
+    ? `\n\n## Live human handoff (ACTIVE)\nThe customer is in a live chat with a human agent. You are ONLY a relay: do NOT answer, look up accounts, issue refunds, transfer, or take ANY action yourself. Always write to the customer in the SAME language as their LATEST message — mirror it exactly, even if an earlier turn used another language. For the customer's message, call requestHumanAgent with their message translated into ENGLISH as \`reason\` (reviewers read English). The \`reply\` it returns is ALREADY in the customer's language — pass it straight to the customer as-is; never translate it or switch its language. If requestHumanAgent returns { closed: true } the live chat is over: reply with ONE short sentence that just asks if there's anything else you can help with — nothing more. Do NOT recap, and do NOT resume or re-ask about their earlier request. Never break character or mention Slack/tools.`
     : "";
 
   const agent = new DurableAgent({
@@ -56,7 +82,15 @@ export async function chatWorkflow(
     stopWhen: stepCountIs(12),
     // Flows to tools: caseId deep-links Slack to the case; authedAccount enforces account-level
     // authorization; quarantined fails sensitive tools closed after repeated manipulation;
-    // humanThreadTs / approvalThreadTs keep a live handoff and a case's approvals in one Slack thread.
-    experimental_context: { caseId, authedAccount, quarantined: !!quarantined, humanThreadTs, approvalThreadTs },
+    // humanThreadTs / approvalThreadTs keep a live handoff and a case's approvals in one Slack thread;
+    // lastCustomerMessage anchors the language a reviewer's relayed reply is rewritten into.
+    experimental_context: {
+      caseId,
+      authedAccount,
+      quarantined: !!quarantined,
+      humanThreadTs,
+      approvalThreadTs,
+      lastCustomerMessage: lastCustomerText(messages),
+    },
   });
 }
