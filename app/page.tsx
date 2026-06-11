@@ -124,7 +124,7 @@ export default function Home() {
     [],
   );
 
-  const { messages, sendMessage, status, setMessages } = useChat({
+  const { messages, sendMessage, status, setMessages, stop } = useChat({
     resume: Boolean(activeRunId),
     transport,
   });
@@ -300,6 +300,13 @@ export default function Home() {
   }
 
   function newCase() {
+    // Free the client from any in-flight or human-suspended run so a fresh case can always start.
+    // While a case is paused waiting on a human in Slack its stream stays open (status "streaming"),
+    // which otherwise keeps the single useChat "busy" and blocks every composer — including a new
+    // case. The paused run stays durable server-side; one browser session tracks one live run at a
+    // time (see RUN_ID_KEY), so we stop listening to the old one to start the new one.
+    stop();
+    if (typeof window !== "undefined") window.localStorage.removeItem(RUN_ID_KEY);
     setActiveId(newCaseId());
     setMessages([]);
     setInput("");
