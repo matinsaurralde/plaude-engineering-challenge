@@ -282,9 +282,20 @@ export default function Home() {
     newCase();
   }
 
+  // Detach from any in-flight or human-suspended stream before entering another case. The single
+  // useChat shares ONE message array and ONE reconnect slot (RUN_ID_KEY); without this, the stream of
+  // the case you're leaving (or the transport auto-reconnecting to it) keeps writing into the shared
+  // array and bleeds into the case you open. The detached run stays durable server-side — one browser
+  // session follows one live run at a time; to resume a parked case, reopen it and reload.
+  function detachRun() {
+    stop();
+    if (typeof window !== "undefined") window.localStorage.removeItem(RUN_ID_KEY);
+  }
+
   function selectCase(id: string) {
     const c = cases.find((x) => x.id === id);
     if (!c) return;
+    detachRun();
     setActiveId(id);
     setMessages(c.messages);
     setTab("chat");
@@ -293,6 +304,7 @@ export default function Home() {
   function openCaseInEng(id: string) {
     const c = cases.find((x) => x.id === id);
     if (!c) return;
+    detachRun();
     setActiveId(id);
     setMessages(c.messages);
     setEngView("detail");
@@ -300,13 +312,7 @@ export default function Home() {
   }
 
   function newCase() {
-    // Free the client from any in-flight or human-suspended run so a fresh case can always start.
-    // While a case is paused waiting on a human in Slack its stream stays open (status "streaming"),
-    // which otherwise keeps the single useChat "busy" and blocks every composer — including a new
-    // case. The paused run stays durable server-side; one browser session tracks one live run at a
-    // time (see RUN_ID_KEY), so we stop listening to the old one to start the new one.
-    stop();
-    if (typeof window !== "undefined") window.localStorage.removeItem(RUN_ID_KEY);
+    detachRun();
     setActiveId(newCaseId());
     setMessages([]);
     setInput("");
