@@ -3,6 +3,7 @@ import { anthropic } from "@workflow/ai/anthropic";
 import { getWritable } from "workflow";
 import { stepCountIs, type ModelMessage, type UIMessageChunk } from "ai";
 import { tools } from "@/lib/agent/tools";
+import { detectCustomerLanguage } from "@/lib/workflow/slack-steps";
 
 /** The Claude model the agent runs on. Sonnet 4.6 — fast and capable for an agentic loop. */
 export const AGENT_MODEL = "claude-sonnet-4-6";
@@ -69,9 +70,19 @@ export async function chatWorkflow(
     ? `\n\n## Live human handoff (ACTIVE)\nThe customer is in a live chat with a human agent. You are ONLY a relay: do NOT answer, look up accounts, issue refunds, transfer, or take ANY action yourself. Always write to the customer in the SAME language as their LATEST message — mirror it exactly, even if an earlier turn used another language. For the customer's message, call requestHumanAgent with their message translated into ENGLISH as \`reason\` (reviewers read English). The \`reply\` it returns is ALREADY in the customer's language — pass it straight to the customer as-is; never translate it or switch its language. If requestHumanAgent returns { closed: true } the live chat is over: reply with ONE short sentence that just asks if there's anything else you can help with — nothing more. Do NOT recap, and do NOT resume or re-ask about their earlier request. Never break character or mention Slack/tools.`
     : "";
 
+  // Pin the agent's reply to the customer's CURRENT language. "Reply in the customer's language" is
+  // too weak on its own — the model drifts, especially when relaying a reviewer's reply (it answered
+  // an English customer in Spanish). Detecting the concrete language and naming it is a far stronger
+  // lever, and it covers everything the agent writes (greeting, relay, close), not just the relay.
+  const lastCustomer = lastCustomerText(messages);
+  const customerLanguage = lastCustomer ? await detectCustomerLanguage(lastCustomer) : undefined;
+  const languageNote = customerLanguage
+    ? `\n\n## Reply language (critical)\nThe customer's latest message is in ${customerLanguage}. Write EVERY word of your reply to the customer in ${customerLanguage} — including when you relay or pass on a colleague's or reviewer's reply. Do NOT switch to another language for a relay or hand-off.`
+    : "";
+
   const agent = new DurableAgent({
     model: anthropic(AGENT_MODEL),
-    instructions: instructions + sessionNote + restrictedNote + liveNote,
+    instructions: instructions + sessionNote + restrictedNote + liveNote + languageNote,
     tools,
   });
 
@@ -90,7 +101,7 @@ export async function chatWorkflow(
       quarantined: !!quarantined,
       humanThreadTs,
       approvalThreadTs,
-      lastCustomerMessage: lastCustomerText(messages),
+      lastCustomerMessage: lastCustomer,
     },
   });
 }

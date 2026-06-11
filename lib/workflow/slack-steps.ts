@@ -79,6 +79,33 @@ export async function translateReplyForCustomer(reply: string, sample: string): 
 }
 
 /**
+ * Identify the language of the customer's latest message, deterministically, so the agent's whole
+ * reply can be pinned to it. "Reply in the customer's language" alone is too weak — the model knows
+ * the language (it greets in it) yet still drifts when it relays a reviewer's reply, answering an
+ * English customer in Spanish. Naming the concrete language in the prompt is a far stronger lever.
+ * Returns the English name of the language (e.g. "English", "Spanish"). "use step" → memoized.
+ */
+export async function detectCustomerLanguage(text: string): Promise<string | undefined> {
+  "use step";
+  const t = text.trim();
+  if (!t) return undefined;
+  try {
+    const { text: out } = await generateText({
+      model: anthropic("claude-haiku-4-5"),
+      prompt:
+        "Identify the language of the message below. Reply with ONLY the English name of that " +
+        "language (e.g. English, Spanish, Portuguese, French, German, Chinese, Japanese) — no other " +
+        "words, no punctuation.\n\nMessage:\n" + t,
+    });
+    const lang = out.trim().split(/[\s.,\n]/)[0];
+    return lang || undefined;
+  } catch (err) {
+    console.error("[translate] detectCustomerLanguage failed:", err instanceof Error ? err.message : err);
+    return undefined;
+  }
+}
+
+/**
  * Post the approval request to Slack. Marked `"use step"` so it runs exactly once and is NOT
  * replayed when the workflow resumes after the human responds (otherwise every resume would
  * post a duplicate message).
