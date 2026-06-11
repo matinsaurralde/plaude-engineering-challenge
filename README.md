@@ -16,6 +16,12 @@ engineering challenge for [Plaude](https://plaude.com).
 > logic. Try a small refund (instant), a large transfer (pauses for a human), ask to talk to
 > a person (live handoff), or try to talk it into breaking its rules.
 
+## Demo video
+
+[![Watch the walkthrough](https://img.youtube.com/vi/VscwnUHiboo/maxresdefault.jpg)](https://www.youtube.com/watch?v=VscwnUHiboo)
+
+A guided tour: an instant refund, an over-threshold transfer that **pauses for a human in Slack and resumes**, a live human handoff, the multilingual relay, and the guardrails holding under prompt injection.
+
 ## How it works
 
 ```
