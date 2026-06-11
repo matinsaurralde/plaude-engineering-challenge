@@ -337,6 +337,7 @@ export function deriveSummary(messages: UIMessage[]): CaseSummary {
   let handledAction = false;
   let securityFlags = 0;
   let handoffClosed = false;
+  let hasHandoff = false;
 
   for (const m of messages) {
     for (const part of partsOf(m)) {
@@ -349,8 +350,9 @@ export function deriveSummary(messages: UIMessage[]): CaseSummary {
       if (t.name === "flagSecurityConcern") securityFlags += 1;
 
       // A live human handoff that the human closed resolves the case (latest result wins).
-      if (t.name === "requestHumanAgent" && t.state === "output-available") {
-        handoffClosed = bool(t.output.closed) ?? false;
+      if (t.name === "requestHumanAgent") {
+        hasHandoff = true;
+        if (t.state === "output-available") handoffClosed = bool(t.output.closed) ?? false;
       }
 
       if (t.name === "lookupAccount" && bool(t.output.found)) {
@@ -394,6 +396,10 @@ export function deriveSummary(messages: UIMessage[]): CaseSummary {
       }
     }
   }
+
+  // A pure live-chat handoff has no money operation — still surface it as the case operation so the
+  // Engineering header reflects what happened instead of sitting blank.
+  if (!operation && hasHandoff) operation = { kind: "live chat" };
 
   let status: CaseStatus = "idle";
   if (messages.length === 0) status = "idle";

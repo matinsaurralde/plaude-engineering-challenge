@@ -990,6 +990,14 @@ function EngineeringTab({
   const [copied, setCopied] = useState(false);
   const dir = ACCOUNT_DIRECTORY[meta.accountId];
 
+  // Show the customer context even when the agent never called lookupAccount (e.g. a pure live-chat
+  // handoff): fall back to the signed-in account's directory entry so the header is never barren.
+  const acct =
+    summary.account ??
+    (dir
+      ? { id: meta.accountId, holder: dir.holder, balanceUsd: dir.balanceUsd, riskLevel: dir.riskLevel }
+      : undefined);
+
   async function copyJson() {
     try {
       await navigator.clipboard.writeText(JSON.stringify(onExport(), null, 2));
@@ -1086,10 +1094,10 @@ function EngineeringTab({
         </div>
         <div className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
           <Field label="Account">
-            {summary.account ? `${summary.account.holder} · #${summary.account.id}` : "—"}
+            {acct ? `${acct.holder} · #${acct.id}` : "—"}
           </Field>
-          <Field label="Balance">{summary.account ? money(summary.account.balanceUsd) : "—"}</Field>
-          <Field label="Risk">{summary.account?.riskLevel ?? "—"}</Field>
+          <Field label="Balance">{acct ? money(acct.balanceUsd) : "—"}</Field>
+          <Field label="Risk">{acct?.riskLevel ?? "—"}</Field>
           <Field label="Operation">
             {summary.operation
               ? `${summary.operation.kind}${summary.operation.amountUsd ? " " + money(summary.operation.amountUsd) : ""}`
