@@ -254,7 +254,7 @@ export default function Home() {
   function submit(text: string) {
     const trimmed = text.trim();
     if (!trimmed || busy) return;
-    sendMessage(
+    void sendMessage(
       { text: trimmed },
       {
         body: {
@@ -267,7 +267,10 @@ export default function Home() {
           approvalThreadTs: approvalTs,
         },
       },
-    );
+    ).catch((err: unknown) => {
+      // Detaching/switching cases aborts this stream on purpose — ignore that; surface anything else.
+      if ((err as { name?: string })?.name !== "AbortError") console.error("[chat] send failed:", err);
+    });
     setInput("");
     setTab("chat");
   }
@@ -288,7 +291,14 @@ export default function Home() {
   // array and bleeds into the case you open. The detached run stays durable server-side — one browser
   // session follows one live run at a time; to resume a parked case, reopen it and reload.
   function detachRun() {
-    stop();
+    // stop() aborts the in-flight fetch, which rejects with AbortError — that's the intended effect
+    // of detaching, not a failure. Swallow it (both a sync throw and the async rejection) so it never
+    // surfaces as a console error / dev overlay.
+    try {
+      void Promise.resolve(stop()).catch(() => {});
+    } catch {
+      /* AbortError from aborting the active stream — expected */
+    }
     if (typeof window !== "undefined") window.localStorage.removeItem(RUN_ID_KEY);
   }
 
